@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Strategy Journal — Paper Trader{% endblock %}
+{% block content %}
+<h2>Strategy Journal</h2>
+
+{% if journal %}
+{% for entry in journal %}
+<article>
+    <header>
+        <span class="badge" style="background:#dbeafe;color:#1e40af">{{ entry.entry_type }}</span>
+        <small>{{ entry.created_at[:16] }} — {{ entry.model.split("-")[1] if "-" in entry.model else entry.model }}</small>
+    </header>
+    <p>{{ entry.content }}</p>
+</article>
+{% endfor %}
+{% else %}
+<p>No journal entries yet. The AI will start adding observations and patterns as it trades.</p>
+{% endif %}
+{% endblock %}

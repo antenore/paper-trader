@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Paper Trader{% endblock %}
+{% block content %}
+<h2>Dashboard</h2>
+
+{% if api_paused %}
+<div class="alert alert-danger">
+    <strong>Trading Paused</strong> — {{ pause_reason }}
+    <form method="post" action="/resume-trading" style="display:inline">
+        <button type="submit" class="outline" style="margin-left:1rem;padding:0.3rem 0.8rem">Resume Trading</button>
+    </form>
+</div>
+{% endif %}
+
+{% if monthly_spend >= budget_warn and not api_paused %}
+<div class="alert alert-warning">
+    <strong>Budget Warning</strong> — Monthly spend: ${{ "%.2f"|format(monthly_spend) }} / ${{ "%.2f"|format(budget_limit) }}
+</div>
+{% endif %}
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="label">Mode</div>
+        <div class="value">{{ mode|upper }}</div>
+    </div>
+    {% if portfolio %}
+    <div class="stat-card">
+        <div class="label">Cash</div>
+        <div class="value">{{ "%.2f"|format(portfolio.cash) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Total Value</div>
+        <div class="value">
+            {% set total = portfolio.cash %}
+            {{ "%.2f"|format(total) }} CHF
+        </div>
+    </div>
+    {% endif %}
+    <div class="stat-card">
+        <div class="label">Open Positions</div>
+        <div class="value">{{ positions|length }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">API Spend (month)</div>
+        <div class="value {% if monthly_spend >= budget_warn %}warning{% endif %}">${{ "%.2f"|format(monthly_spend) }}</div>
+    </div>
+</div>
+
+{% if equity_values %}
+<article>
+    <h3>Equity Curve</h3>
+    <canvas id="equity-chart"></canvas>
+</article>
+{% endif %}
+
+<div class="grid">
+    <article>
+        <h3>Open Positions</h3>
+        {% if positions %}
+        <table>
+            <thead>
+                <tr><th>Symbol</th><th>Shares</th><th>Avg Cost</th><th>Opened</th></tr>
+            </thead>
+            <tbody>
+            {% for p in positions %}
+                <tr>
+                    <td><strong>{{ p.symbol }}</strong></td>
+                    <td>{{ "%.2f"|format(p.shares) }}</td>
+                    <td>${{ "%.2f"|format(p.avg_cost) }}</td>
+                    <td>{{ p.opened_at[:10] }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>No open positions.</p>
+        {% endif %}
+    </article>
+
+    <article>
+        <h3>Latest Decisions</h3>
+        {% if decisions %}
+        <table>
+            <thead>
+                <tr><th>Symbol</th><th>Action</th><th>Confidence</th><th>Time</th></tr>
+            </thead>
+            <tbody>
+            {% for d in decisions %}
+                <tr>
+                    <td><strong>{{ d.symbol }}</strong></td>
+                    <td><span class="badge badge-{{ d.action|lower }}">{{ d.action }}</span></td>
+                    <td>{{ "%.0f"|format(d.confidence * 100) }}%</td>
+                    <td>{{ d.created_at[:16] }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        <a href="/decisions">View all &rarr;</a>
+        {% else %}
+        <p>No decisions yet.</p>
+        {% endif %}
+    </article>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if equity_values %}
+<script>
+const ctx = document.getElementById('equity-chart').getContext('2d');
+const datasets = [{
+    label: 'Portfolio Value (CHF)',
+    data: {{ equity_values | tojson }},
+    borderColor: '#3b82f6',
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    fill: true,
+    tension: 0.3,
+}];
+{% if benchmark_values %}
+datasets.push({
+    label: 'SPY Buy & Hold (CHF)',
+    data: {{ benchmark_values | tojson }},
+    borderColor: '#f59e0b',
+    backgroundColor: 'transparent',
+    borderDash: [6, 3],
+    fill: false,
+    tension: 0.3,
+    spanGaps: true,
+});
+{% endif %}
+new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: {{ equity_dates | tojson }},
+        datasets: datasets,
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: { display: datasets.length > 1 },
+        },
+        scales: {
+            y: { beginAtZero: false },
+        }
+    }
+});
+</script>
+{% endif %}
+{% endblock %}

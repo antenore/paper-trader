@@ -1,0 +1,27 @@
+{% if portfolio %}
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="label">Cash</div>
+        <div class="value">{{ "%.2f"|format(portfolio.cash) }} CHF</div>
+    </div>
+</div>
+{% endif %}
+
+{% if positions %}
+<table>
+    <thead>
+        <tr><th>Symbol</th><th>Shares</th><th>Avg Cost</th></tr>
+    </thead>
+    <tbody>
+    {% for p in positions %}
+        <tr>
+            <td>{{ p.symbol }}</td>
+            <td>{{ "%.2f"|format(p.shares) }}</td>
+            <td>${{ "%.2f"|format(p.avg_cost) }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No open positions.</p>
+{% endif %}

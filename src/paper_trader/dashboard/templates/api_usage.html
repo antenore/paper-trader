@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}API Usage — Paper Trader{% endblock %}
+{% block content %}
+<h2>API Usage</h2>
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="label">Monthly Spend</div>
+        <div class="value {% if monthly_spend >= budget_warn %}warning{% endif %}">${{ "%.2f"|format(monthly_spend) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Budget Limit</div>
+        <div class="value">${{ "%.2f"|format(budget_limit) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Remaining</div>
+        <div class="value">${{ "%.2f"|format(budget_limit - monthly_spend) }}</div>
+    </div>
+</div>
+
+<article>
+    <h3>Spend by Model</h3>
+    {% if by_model %}
+    <table>
+        <thead>
+            <tr><th>Model</th><th>Calls</th><th>Input Tokens</th><th>Output Tokens</th><th>Cost</th></tr>
+        </thead>
+        <tbody>
+        {% for m in by_model %}
+            <tr>
+                <td>{{ m.model.split("-")[1] if "-" in m.model else m.model }}</td>
+                <td>{{ m.call_count }}</td>
+                <td>{{ "{:,}".format(m.total_input) }}</td>
+                <td>{{ "{:,}".format(m.total_output) }}</td>
+                <td>${{ "%.4f"|format(m.total_cost) }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>No API calls recorded this month.</p>
+    {% endif %}
+</article>
+
+{% if daily %}
+<article>
+    <h3>Daily Spend</h3>
+    <canvas id="daily-chart" style="max-height:300px"></canvas>
+</article>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if daily %}
+<script>
+new Chart(document.getElementById('daily-chart').getContext('2d'), {
+    type: 'bar',
+    data: {
+        labels: {{ daily|map(attribute='day')|list|tojson }},
+        datasets: [{
+            label: 'Daily Cost ($)',
+            data: {{ daily|map(attribute='total_cost')|list|tojson }},
+            backgroundColor: 'rgba(59, 130, 246, 0.6)',
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true } }
+    }
+});
+</script>
+{% endif %}
+{% endblock %}

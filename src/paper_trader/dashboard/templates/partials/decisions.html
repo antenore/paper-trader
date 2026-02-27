@@ -1,0 +1,19 @@
+{% if decisions %}
+<table>
+    <thead>
+        <tr><th>Symbol</th><th>Action</th><th>Confidence</th><th>Time</th></tr>
+    </thead>
+    <tbody>
+    {% for d in decisions %}
+        <tr>
+            <td><strong>{{ d.symbol }}</strong></td>
+            <td><span class="badge badge-{{ d.action|lower }}">{{ d.action }}</span></td>
+            <td>{{ "%.0f"|format(d.confidence * 100) }}%</td>
+            <td>{{ d.created_at[:16] }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No decisions yet.</p>
+{% endif %}
