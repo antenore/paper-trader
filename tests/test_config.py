@@ -8,8 +8,8 @@ def test_default_settings():
     assert s.port == 8420
     assert s.budget_hard_stop_usd == 50.0
     assert s.safety_stop_pct == 0.50
-    assert s.max_position_pct == 0.30
-    assert s.min_cash_reserve == 100.0
+    assert s.max_position_pct == 0.40
+    assert s.min_cash_reserve == 50.0
 
 
 def test_model_pricing_has_all_models():

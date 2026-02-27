@@ -15,19 +15,27 @@ uv run paper-trader
 
 ## How It Works
 
-- **3x daily** during US market hours (10:00, 13:00, 16:15 ET): stock screening, analysis, and trading decisions using Haiku
-- **Weekly** (Friday 17:00 ET): performance review with Sonnet
-- **Monthly** (1st trading day, 17:30 ET): strategic review with Opus
-- **Midday smart-skip**: if no stock moved >2%, skips the AI call to save budget
+| Time (ET) | Type | What it does |
+|-----------|------|-------------|
+| 10:00 | full | Screen + analyze + trade (Haiku) |
+| 13:00 | quick | Check positions + trade if movement >1% |
+| 14:30 | full | Screen + analyze + trade — afternoon session (Haiku) |
+| 16:15 | snapshot | Record closing prices |
+| Fri 17:00 | weekly | Performance review (Sonnet) |
+| 1st of month 17:30 | monthly | Strategic review (Opus) |
+
+- **Midday smart-skip**: if no stock moved >1% **and** no open positions, skips the AI call to save budget
 - **Estimated cost**: ~$2/month (hard cap at $50)
 
 ## Features
 
 - Real market data via yfinance (free, no API key needed)
 - AI decisions with confidence scoring and reasoning
-- Risk management: safety stop (50%), position limit (30%), cash reserve (100 CHF)
+- Risk management: safety stop (50%), position limit (40%), cash reserve (50 CHF)
+- Aggressive paper trading stance: confidence threshold 0.4, prefers action over inaction
 - Dry run mode: simulate ~30 days with historical data
 - Strategy journal: AI learns and records patterns over time
+- SPY benchmark comparison with alpha tracking
 - Dashboard with equity curve, decision log, API usage tracking
 
 ## Dashboard Pages
@@ -39,6 +47,16 @@ uv run paper-trader
 | `/journal` | Strategy journal (observations, patterns, rules) |
 | `/api-usage` | API cost breakdown by model and day |
 | `/dry-run` | Start/view dry run simulations |
+
+## Running as a Service
+
+```bash
+# The bot runs as a systemd user service (no sudo needed)
+systemctl --user status paper-trader    # check status
+systemctl --user restart paper-trader   # restart
+systemctl --user stop paper-trader      # stop
+journalctl --user -u paper-trader -f    # live logs
+```
 
 ## Running Tests
 

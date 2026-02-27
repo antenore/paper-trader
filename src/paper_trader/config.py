@@ -25,8 +25,8 @@ class Settings(BaseSettings):
 
     # Risk limits
     safety_stop_pct: float = 0.50  # pause if portfolio < 50% of initial
-    max_position_pct: float = 0.30  # no single position > 30%
-    min_cash_reserve: float = 100.0  # always keep 100 CHF
+    max_position_pct: float = 0.40  # no single position > 40%
+    min_cash_reserve: float = 50.0  # always keep 50 CHF
 
     # API budget (USD)
     budget_warn_usd: float = 45.0
@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     timezone: str = "US/Eastern"
 
     # Movement threshold for midday smart-skip (%)
-    movement_threshold_pct: float = 2.0
+    movement_threshold_pct: float = 1.0
 
     # Benchmark for alpha/beta comparison
     benchmark_symbol: str = "SPY"

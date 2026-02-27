@@ -144,13 +144,10 @@ class TestTradingPipeline:
         assert len(snaps) == 1
 
     @pytest.mark.asyncio
-    async def test_quick_skip_no_movement(self, pipeline_setup):
+    async def test_quick_skip_no_movement_no_positions(self, pipeline_setup):
         db, ai_client, market = pipeline_setup
 
-        # With historical data at index 4, AAPL 153->158 = 3.2% change
-        # and GOOGL 145->143 = 1.3% change
-        # Since AAPL moved >2%, it should NOT skip
-        # Let's use data with small movements instead
+        # Use data with <1% movements (new threshold)
         small_market = HistoricalDataProvider(
             {
                 "AAPL": make_history([150, 150.5, 150.2, 150.8, 151.0]),
@@ -161,6 +158,38 @@ class TestTradingPipeline:
 
         result = await run_trading_pipeline(db, ai_client, small_market, run_type="quick")
         assert result.get("skipped") is True
+
+    @pytest.mark.asyncio
+    async def test_quick_with_positions_analyzes_anyway(self, pipeline_setup):
+        """Even without significant movement, midday check should analyze if we have open positions."""
+        db, ai_client, market = pipeline_setup
+
+        # Create an open position so we have positions to check
+        await db.execute(
+            "INSERT INTO positions (symbol, shares, avg_cost, is_dry_run) VALUES (?, ?, ?, ?)",
+            ("AAPL", 1.0, 150.0, 0),
+        )
+        await db.commit()
+
+        # Use data with <1% movements
+        small_market = HistoricalDataProvider(
+            {
+                "AAPL": make_history([150, 150.5, 150.2, 150.8, 151.0]),
+                "GOOGL": make_history([140, 140.2, 140.1, 140.3, 140.5]),
+            },
+            current_index=4,
+        )
+
+        async def mock_call(*args, **kwargs):
+            return mock_analysis_hold_response()
+
+        with patch.object(ai_client, "call", side_effect=mock_call):
+            with patch("paper_trader.ai.analyst.fetch_symbol_news", new_callable=AsyncMock, return_value=[]):
+                result = await run_trading_pipeline(db, ai_client, small_market, run_type="quick")
+
+        # Should NOT be skipped — we have open positions
+        assert result.get("skipped") is not True
+        assert "analysis" in result
 
     @pytest.mark.asyncio
     async def test_api_paused_handles_gracefully(self, pipeline_setup):

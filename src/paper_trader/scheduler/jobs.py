@@ -54,11 +54,12 @@ async def run_job(run_type: str) -> None:
 
 # Schedule configuration: (run_type, cron_kwargs, job_id, job_name)
 SCHEDULE = [
-    ("full",           dict(day_of_week="mon-fri", hour=10, minute=0),              "morning_scan",   "Morning Scan"),
-    ("quick",          dict(day_of_week="mon-fri", hour=13, minute=0),              "midday_check",   "Midday Check"),
-    ("snapshot",       dict(day_of_week="mon-fri", hour=16, minute=15),             "end_of_day",     "End of Day"),
-    ("weekly_review",  dict(day_of_week="fri", hour=17, minute=0),                  "weekly_review",  "Weekly Review"),
-    ("monthly_review", dict(day="1-3", day_of_week="mon-fri", hour=17, minute=30),  "monthly_review", "Monthly Review"),
+    ("full",           dict(day_of_week="mon-fri", hour=10, minute=0),              "morning_scan",    "Morning Scan"),
+    ("quick",          dict(day_of_week="mon-fri", hour=13, minute=0),              "midday_check",    "Midday Check"),
+    ("full",           dict(day_of_week="mon-fri", hour=14, minute=30),             "afternoon_scan",  "Afternoon Scan"),
+    ("snapshot",       dict(day_of_week="mon-fri", hour=16, minute=15),             "end_of_day",      "End of Day"),
+    ("weekly_review",  dict(day_of_week="fri", hour=17, minute=0),                  "weekly_review",   "Weekly Review"),
+    ("monthly_review", dict(day="1-3", day_of_week="mon-fri", hour=17, minute=30),  "monthly_review",  "Monthly Review"),
 ]
 
 

@@ -53,41 +53,42 @@ class TestCashReserve:
         assert result["ok"]
 
     def test_buy_would_breach_reserve(self):
-        # 800 cash, buy 1 share at 750 → 50 left < 100 reserve
-        # Should auto-reduce to (800-100)/750 = 0.933 shares
-        result = check_risk("BUY", "AAPL", 1, 750, 800.0, [], 800)
+        # 800 cash, buy 1 share at 780 → 20 left < 50 reserve
+        # Should auto-reduce to (800-50)/780 ≈ 0.96 shares
+        # Position limit: 40% of 800 = 320 → 320/780 ≈ 0.41, so position limit kicks in first
+        result = check_risk("BUY", "AAPL", 1, 780, 800.0, [], 800)
         assert result["ok"]
         assert result["adjusted_shares"] < 1.0
-        assert result["adjusted_shares"] * 750 <= 700.0 + 0.01
+        assert result["adjusted_shares"] * 780 <= 320.0 + 0.01
 
     def test_not_enough_cash_for_reserve(self):
         # 500 cash, 0 positions → above safety stop (500 > 400)
-        # But want to buy at 500, leaving 0 < 100 reserve
-        # Available = 500 - 100 = 400, so 400/500 = 0.8 shares
-        # Position limit: 30% of 500 = 150, so 150/500 = 0.3 shares
+        # Want to buy at 500, leaving 0 < 50 reserve
+        # Available = 500 - 50 = 450, so 450/500 = 0.9 shares
+        # Position limit: 40% of 500 = 200, so 200/500 = 0.4 shares
         result = check_risk("BUY", "AAPL", 1, 500, 500.0, [], 800)
         assert result["ok"]
-        assert result["adjusted_shares"] <= 0.3 + 0.01
+        assert result["adjusted_shares"] <= 0.4 + 0.01
 
 
 class TestPositionLimit:
     def test_within_limit(self):
-        # Portfolio 800, max 30% = 240. Buy 1 share at 200 → ok
+        # Portfolio 800, max 40% = 320. Buy 1 share at 200 → ok
         result = check_risk("BUY", "AAPL", 1, 200, 800.0, [], 800)
         assert result["ok"]
 
     def test_exceeds_limit_auto_reduce(self):
-        # Portfolio ~800, max 30% = 240. Buy 2 shares at 200 = 400 → reduce to 240/200 = 1.2
+        # Portfolio ~800, max 40% = 320. Buy 2 shares at 200 = 400 → reduce to 320/200 = 1.6
         result = check_risk("BUY", "AAPL", 2, 200, 800.0, [], 800)
         assert result["ok"]
         assert result["adjusted_shares"] < 2.0
-        assert result["adjusted_shares"] * 200 <= 240.0 + 0.01
+        assert result["adjusted_shares"] * 200 <= 320.0 + 0.01
 
     def test_existing_position_at_limit(self):
-        # Portfolio = 560 cash + 240 position = 800. 30% = 240.
-        # Existing AAPL already at 240 → no room
-        positions = [make_position("AAPL", 1, 240)]
-        result = check_risk("BUY", "AAPL", 1, 240, 560.0, positions, 800)
+        # Portfolio = 480 cash + 320 position = 800. 40% = 320.
+        # Existing AAPL already at 320 → no room
+        positions = [make_position("AAPL", 1, 320)]
+        result = check_risk("BUY", "AAPL", 1, 320, 480.0, positions, 800)
         assert not result["ok"]
         assert "position limit" in result["reason"].lower()
 
@@ -100,11 +101,11 @@ class TestInsufficientCash:
 
     def test_auto_reduce_to_fit_cash(self):
         # 500 cash, want 2 shares at 150 (=300). Fits in cash.
-        # Cash reserve: 500-300=200 > 100 → ok
-        # Position limit: 30% of 500 = 150. So reduce to 150/150 = 1.0 shares
+        # Cash reserve: 500-300=200 > 50 → ok
+        # Position limit: 40% of 500 = 200. So reduce to 200/150 ≈ 1.33 shares
         result = check_risk("BUY", "AAPL", 2, 150, 500.0, [], 800)
         assert result["ok"]
-        assert result["adjusted_shares"] <= 1.0 + 0.01
+        assert result["adjusted_shares"] <= 1.34
 
 
 class TestEdgeCases:

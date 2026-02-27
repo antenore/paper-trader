@@ -39,11 +39,14 @@ async def run_trading_pipeline(
 
         if run_type == "quick":
             # Check if any significant movement before calling AI
-            should_analyze = await _check_significant_movement(db, market, is_dry_run)
-            if not should_analyze:
-                logger.info("No significant movement, skipping AI analysis")
+            has_movement = await _check_significant_movement(db, market, is_dry_run)
+            has_positions = bool(await queries.get_open_positions(db, is_dry_run=is_dry_run))
+            if not has_movement and not has_positions:
+                logger.info("No significant movement and no open positions, skipping AI analysis")
                 result["skipped"] = True
                 return result
+            if not has_movement:
+                logger.info("No significant movement but have open positions, checking for sell signals")
 
         # Step 1: Screening (full runs only)
         if run_type == "full":
@@ -66,8 +69,8 @@ async def run_trading_pipeline(
         for decision in analysis.decisions:
             if decision.action == "HOLD":
                 continue
-            if decision.confidence < 0.6:
-                logger.info("Skipping %s %s (confidence %.2f < 0.6)", decision.action, decision.symbol, decision.confidence)
+            if decision.confidence < 0.4:
+                logger.info("Skipping %s %s (confidence %.2f < 0.4)", decision.action, decision.symbol, decision.confidence)
                 continue
 
             trade_result = await _execute_decision(db, market, decision, is_dry_run)
