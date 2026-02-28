@@ -7,7 +7,7 @@ from typing import Any
 import anthropic
 import aiosqlite
 
-from paper_trader.config import MODEL_PRICING, settings
+from paper_trader.config import MODEL_HAIKU, MODEL_PRICING, settings
 from paper_trader.db import queries
 
 logger = logging.getLogger(__name__)
@@ -115,7 +115,7 @@ class AIClient:
         pricing = MODEL_PRICING.get(model)
         if pricing is None:
             logger.warning("Unknown model %s, using Haiku pricing as fallback", model)
-            pricing = {"input": 0.80, "output": 4.00}
+            pricing = MODEL_PRICING[MODEL_HAIKU]
 
         input_cost = (input_tokens / 1_000_000) * pricing["input"]
         output_cost = (output_tokens / 1_000_000) * pricing["output"]

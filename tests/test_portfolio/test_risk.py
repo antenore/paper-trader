@@ -108,6 +108,27 @@ class TestInsufficientCash:
         assert result["adjusted_shares"] <= 1.34
 
 
+class TestSectorCap:
+    def test_blocks_concentrated_buy(self):
+        # 300 cash + 500 in positions = 800 portfolio
+        # Existing tech: AAPL 200 + MSFT 100 + NVDA 200 = 500
+        # Buying AMD 100 → Tech = 600/800 = 75% > 60% cap
+        positions = [
+            make_position("AAPL", 2, 100),
+            make_position("MSFT", 1, 100),
+            make_position("NVDA", 2, 100),
+        ]
+        result = check_risk("BUY", "AMD", 1, 100, 300.0, positions, 800)
+        assert not result["ok"]
+        assert "sector cap" in result["reason"].lower()
+
+    def test_allows_diversified_buy(self):
+        # 700 cash + 100 AAPL = 800. Buying JPM 100 → Financials = 100/800 = 12.5% < 60%
+        positions = [make_position("AAPL", 1, 100)]
+        result = check_risk("BUY", "JPM", 1, 100, 700.0, positions, 800)
+        assert result["ok"]
+
+
 class TestEdgeCases:
     def test_very_small_trade_rejected(self):
         # After adjustments, if trade < 0.01 shares → reject

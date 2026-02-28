@@ -101,10 +101,12 @@ async def test_buy_uses_settings_initial_cash(db):
     with patch("paper_trader.portfolio.manager.settings") as mock_settings, \
          patch("paper_trader.portfolio.risk.settings") as mock_risk_settings:
         mock_settings.initial_cash_chf = custom_cash
+        mock_settings.stop_loss_pct = 0.07
         mock_risk_settings.initial_cash_chf = custom_cash
         mock_risk_settings.safety_stop_pct = 0.50
         mock_risk_settings.max_position_pct = 0.30
         mock_risk_settings.min_cash_reserve = 100.0
+        mock_risk_settings.sector_cap_pct = 0.60
 
         result = await execute_buy(db, "AAPL", 1.0, 100.0)
         assert result["ok"]

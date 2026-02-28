@@ -11,6 +11,7 @@ from pathlib import Path
 from paper_trader.db.connection import get_db
 from paper_trader.db import queries
 from paper_trader.config import settings
+from paper_trader.portfolio.tools import get_sector, get_sector_exposure
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,33 @@ async def index(request: Request):
     api_paused = await queries.get_setting(db, "api_paused") == "true"
     pause_reason = await queries.get_setting(db, "pause_reason") or ""
 
+    # Enrich positions with sector, current price, P&L%, stop distance
+    enriched_positions = []
+    prices: dict[str, float] = {}
+    if positions:
+        from paper_trader.market.prices import LiveDataProvider
+        try:
+            market = LiveDataProvider()
+            symbols = [p["symbol"] for p in positions]
+            prices = await market.get_current_prices(symbols)
+        except Exception:
+            logger.debug("Failed to fetch live prices for dashboard")
+    for p in positions:
+        current_price = prices.get(p["symbol"], p["avg_cost"])
+        pnl_pct = (current_price / p["avg_cost"] - 1) * 100 if p["avg_cost"] > 0 else 0
+        stop = p.get("stop_loss_price")
+        stop_dist = ((current_price - stop) / current_price * 100) if stop and current_price > 0 else None
+        enriched_positions.append({
+            **p,
+            "sector": get_sector(p["symbol"]),
+            "current_price": current_price,
+            "pnl_pct": pnl_pct,
+            "stop_distance_pct": stop_dist,
+        })
+
+    # Sector exposure for doughnut chart
+    sector_exposure = get_sector_exposure(positions, prices) if positions else {}
+
     # Equity curve data (reversed for chronological order)
     snapshots_chrono = list(reversed(snapshots))
     equity_dates = [s["snapshot_at"][:10] for s in snapshots_chrono]
@@ -40,7 +68,7 @@ async def index(request: Request):
 
     return templates.TemplateResponse(request, "index.html", {
         "portfolio": portfolio,
-        "positions": positions,
+        "positions": enriched_positions,
         "snapshots": snapshots,
         "decisions": decisions,
         "monthly_spend": monthly_spend,
@@ -52,6 +80,7 @@ async def index(request: Request):
         "equity_dates": equity_dates,
         "equity_values": equity_values,
         "benchmark_values": benchmark_values if has_benchmark else [],
+        "sector_exposure": sector_exposure,
     })
 
 
@@ -127,6 +156,101 @@ async def start_dry_run_handler():
     ai_client = AIClient(db)
     asyncio.create_task(run_dry_run(db, ai_client))
     return RedirectResponse(url="/dry-run", status_code=303)
+
+
+# ── Settings ─────────────────────────────────────────────────────────
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    from paper_trader.config import CONFIG_KEYS, _serialize_list
+    from paper_trader.scheduler.jobs import get_current_schedule
+
+    current = {}
+    for db_key, (attr_name, type_conv) in CONFIG_KEYS.items():
+        val = getattr(settings, attr_name)
+        if type_conv is list:
+            current[db_key] = _serialize_list(val)
+        else:
+            current[db_key] = val
+
+    schedule = get_current_schedule()
+    saved = request.query_params.get("saved")
+
+    return templates.TemplateResponse(request, "settings.html", {
+        "config": current,
+        "schedule": schedule,
+        "saved": saved,
+    })
+
+
+@router.post("/settings/config")
+async def save_config(request: Request):
+    from paper_trader.config import CONFIG_KEYS, save_config_to_db
+
+    db = await get_db()
+    form = await request.form()
+
+    for db_key in CONFIG_KEYS:
+        value = form.get(db_key)
+        if value is not None:
+            ok = await save_config_to_db(db, db_key, str(value))
+            if not ok:
+                return RedirectResponse(url="/settings?saved=error", status_code=303)
+
+    return RedirectResponse(url="/settings?saved=config", status_code=303)
+
+
+@router.post("/settings/schedule")
+async def save_schedule(request: Request):
+    import json
+    from paper_trader.scheduler.jobs import SCHEDULE, reschedule_job
+
+    db = await get_db()
+    form = await request.form()
+
+    for _, default_cron, job_id, _ in SCHEDULE:
+        hour = form.get(f"{job_id}.hour")
+        minute = form.get(f"{job_id}.minute")
+        day_of_week = form.get(f"{job_id}.day_of_week")
+        if hour is None or minute is None:
+            continue
+
+        cron_kw: dict = {}
+        try:
+            cron_kw["hour"] = int(hour)
+            cron_kw["minute"] = int(minute)
+        except ValueError:
+            return RedirectResponse(url="/settings?saved=error", status_code=303)
+
+        if day_of_week:
+            cron_kw["day_of_week"] = day_of_week
+        if "day" in default_cron:
+            day = form.get(f"{job_id}.day")
+            if day:
+                cron_kw["day"] = day
+
+        reschedule_job(job_id, cron_kw)
+
+        # Persist to DB
+        await queries.set_setting(db, f"schedule.{job_id}", json.dumps(cron_kw))
+
+    return RedirectResponse(url="/settings?saved=schedule", status_code=303)
+
+
+# ── Manual Job Triggers ──────────────────────────────────────────────
+
+@router.post("/trigger/{job_id}")
+async def trigger_job_route(job_id: str):
+    from paper_trader.scheduler.jobs import trigger_job
+    success, message = trigger_job(job_id)
+    status_code = 200 if success else 409
+    return {"success": success, "message": message}
+
+
+@router.get("/api/job-status")
+async def job_status():
+    from paper_trader.scheduler.jobs import get_job_statuses
+    return get_job_statuses()
 
 
 # ── HTMX Partials ────────────────────────────────────────────────────

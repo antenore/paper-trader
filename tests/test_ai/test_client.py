@@ -22,9 +22,9 @@ async def ai_client(db_with_portfolio):
 
 class TestCostCalculation:
     def test_haiku_cost(self):
-        # 1000 input ($0.80/M) + 500 output ($4/M)
+        # 1000 input ($1.00/M) + 500 output ($5/M)
         cost = AIClient._calculate_cost(MODEL_HAIKU, 1000, 500)
-        expected = (1000 / 1e6) * 0.80 + (500 / 1e6) * 4.00
+        expected = (1000 / 1e6) * 1.00 + (500 / 1e6) * 5.00
         assert abs(cost - expected) < 0.0001
 
     def test_sonnet_cost(self):
@@ -34,7 +34,7 @@ class TestCostCalculation:
 
     def test_opus_cost(self):
         cost = AIClient._calculate_cost(MODEL_OPUS, 1000, 500)
-        expected = (1000 / 1e6) * 15.00 + (500 / 1e6) * 75.00
+        expected = (1000 / 1e6) * 5.00 + (500 / 1e6) * 25.00
         assert abs(cost - expected) < 0.0001
 
     def test_unknown_model_uses_haiku_fallback(self):

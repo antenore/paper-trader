@@ -43,6 +43,13 @@ For each stock, decide: BUY, SELL, or HOLD.
 - Maximum 40% in any single position
 - Keep at least 50 CHF cash reserve
 
+Risk rules enforced by the system (you will see data in "Analysis Tools Data"):
+- STOP-LOSS ALERTS: positions that breached their stop are auto-sold before you see them. Review any remaining alerts.
+- SECTOR EXPOSURE: no single sector should exceed 60% of portfolio. Prefer diversification.
+- CORRELATION: if average correlation is high (>0.75), prefer uncorrelated new positions.
+- RELATIVE STRENGTH: prefer stocks with RS ratio > 1.0 (outperforming SPY). Prioritize high-RS names for BUY.
+- ETF OVERLAP: avoid buying a stock already covered by a held ETF (and vice versa).
+
 Prefer action over inaction. If two stocks look equally interesting, buy both rather than neither. We want a diversified portfolio of 3-5 positions, not a pile of cash.
 
 You must respond with valid JSON matching this schema:
@@ -57,8 +64,9 @@ def analysis_prompt(
     watchlist_symbols: list[str],
     price_data: str,
     news: str,
+    tools_context: str = "",
 ) -> str:
-    return f"""Analyze positions and watchlist stocks. Make trading decisions.
+    prompt = f"""Analyze positions and watchlist stocks. Make trading decisions.
 
 Portfolio:
 {portfolio_summary}
@@ -69,9 +77,16 @@ Price data:
 {price_data}
 
 News:
-{news}
+{news}"""
 
-For each open position and interesting watchlist stock, provide a decision."""
+    if tools_context:
+        prompt += f"""
+
+Analysis Tools Data:
+{tools_context}"""
+
+    prompt += "\n\nFor each open position and interesting watchlist stock, provide a decision."
+    return prompt
 
 
 WEEKLY_REVIEW_SYSTEM = """You are a weekly trading strategist reviewing a paper trading portfolio's performance.

@@ -1,4 +1,5 @@
 {% if decisions %}
+<div class="table-responsive">
 <table>
     <thead>
         <tr><th>Symbol</th><th>Action</th><th>Confidence</th><th>Time</th></tr>
@@ -14,6 +15,7 @@
     {% endfor %}
     </tbody>
 </table>
+</div>
 {% else %}
 <p>No decisions yet.</p>
 {% endif %}

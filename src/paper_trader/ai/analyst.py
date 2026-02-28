@@ -13,6 +13,7 @@ from paper_trader.db import queries
 from paper_trader.market.news import fetch_symbol_news, format_news_for_ai
 from paper_trader.market.prices import MarketDataProvider
 from paper_trader.portfolio.manager import get_portfolio_value
+from paper_trader.portfolio.tools import build_tools_context
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +71,18 @@ async def run_analysis(
         news_items.extend(await fetch_symbol_news(symbol, max_items=2))
     news_text = format_news_for_ai(news_items)
 
+    # Build tools context (stop-loss, sector, correlation, RS, ETF overlap)
+    tools_context = ""
+    try:
+        tools_context = await build_tools_context(positions, prices, watchlist_symbols, market)
+    except Exception:
+        logger.debug("Tools context build failed, continuing without it", exc_info=True)
+
     # Call AI
     raw = await ai_client.call(
         model=MODEL_HAIKU,
         system=ANALYSIS_SYSTEM,
-        prompt=analysis_prompt(portfolio_summary, watchlist_symbols, price_data, news_text),
+        prompt=analysis_prompt(portfolio_summary, watchlist_symbols, price_data, news_text, tools_context=tools_context),
         purpose="analysis",
         is_dry_run=is_dry_run,
     )

@@ -77,11 +77,16 @@ async def get_position_by_symbol(
 
 
 async def open_position(
-    db: aiosqlite.Connection, symbol: str, shares: float, avg_cost: float, is_dry_run: bool = False
+    db: aiosqlite.Connection,
+    symbol: str,
+    shares: float,
+    avg_cost: float,
+    is_dry_run: bool = False,
+    stop_loss_price: float | None = None,
 ) -> int:
     cursor = await db.execute(
-        "INSERT INTO positions (symbol, shares, avg_cost, is_dry_run) VALUES (?, ?, ?, ?)",
-        (symbol, shares, avg_cost, int(is_dry_run)),
+        "INSERT INTO positions (symbol, shares, avg_cost, is_dry_run, stop_loss_price) VALUES (?, ?, ?, ?, ?)",
+        (symbol, shares, avg_cost, int(is_dry_run), stop_loss_price),
     )
     await db.commit()
     return cursor.lastrowid  # type: ignore[return-value]
@@ -98,12 +103,22 @@ async def close_position(
 
 
 async def update_position_shares(
-    db: aiosqlite.Connection, position_id: int, new_shares: float, new_avg_cost: float
+    db: aiosqlite.Connection,
+    position_id: int,
+    new_shares: float,
+    new_avg_cost: float,
+    stop_loss_price: float | None = None,
 ) -> None:
-    await db.execute(
-        "UPDATE positions SET shares = ?, avg_cost = ? WHERE id = ?",
-        (new_shares, new_avg_cost, position_id),
-    )
+    if stop_loss_price is not None:
+        await db.execute(
+            "UPDATE positions SET shares = ?, avg_cost = ?, stop_loss_price = ? WHERE id = ?",
+            (new_shares, new_avg_cost, stop_loss_price, position_id),
+        )
+    else:
+        await db.execute(
+            "UPDATE positions SET shares = ?, avg_cost = ? WHERE id = ?",
+            (new_shares, new_avg_cost, position_id),
+        )
     await db.commit()
 
 

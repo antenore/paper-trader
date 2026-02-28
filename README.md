@@ -31,22 +31,25 @@ uv run paper-trader
 
 - Real market data via yfinance (free, no API key needed)
 - AI decisions with confidence scoring and reasoning
-- Risk management: safety stop (50%), position limit (40%), cash reserve (50 CHF)
+- Risk management: safety stop (50%), position limit (40%), cash reserve (50 CHF), sector cap (60%), stop-loss (7%)
+- Trading tools: stop-loss automation, correlation matrix, sector exposure analysis, relative strength scanner
+- Rule enforcement: staggered entry (40% session cap), ETF overlap detection, sector concentration limits
 - Aggressive paper trading stance: confidence threshold 0.4, prefers action over inaction
 - Dry run mode: simulate ~30 days with historical data
 - Strategy journal: AI learns and records patterns over time
 - SPY benchmark comparison with alpha tracking
-- Dashboard with equity curve, decision log, API usage tracking
+- Dashboard with equity curve, sector allocation chart, decision log, API usage tracking
 
 ## Dashboard Pages
 
 | Route | Description |
 |---|---|
-| `/` | Main dashboard: portfolio, positions, equity curve |
+| `/` | Main dashboard: portfolio, positions, equity curve, sector chart |
 | `/decisions` | Full decision log with reasoning |
 | `/journal` | Strategy journal (observations, patterns, rules) |
 | `/api-usage` | API cost breakdown by model and day |
 | `/dry-run` | Start/view dry run simulations |
+| `/settings` | Configure risk parameters, schedule, watchlist |
 
 ## Running as a Service
 

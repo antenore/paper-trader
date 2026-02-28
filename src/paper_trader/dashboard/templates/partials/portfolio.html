@@ -8,6 +8,7 @@
 {% endif %}
 
 {% if positions %}
+<div class="table-responsive">
 <table>
     <thead>
         <tr><th>Symbol</th><th>Shares</th><th>Avg Cost</th></tr>
@@ -22,6 +23,7 @@
     {% endfor %}
     </tbody>
 </table>
+</div>
 {% else %}
 <p>No open positions.</p>
 {% endif %}

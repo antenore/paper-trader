@@ -121,6 +121,7 @@ MIGRATIONS = [
     ("dry_run_sessions", "current_cash", "REAL"),
     ("portfolio_snapshots", "spy_price", "REAL"),
     ("portfolio_snapshots", "benchmark_value", "REAL"),
+    ("positions", "stop_loss_price", "REAL"),
 ]
 
 
@@ -136,6 +137,8 @@ async def _apply_migrations(db: aiosqlite.Connection) -> None:
     """Add missing columns to existing tables (idempotent)."""
     for table, column, col_type in MIGRATIONS:
         existing = await db.execute_fetchall(f"PRAGMA table_info({table})")
+        if not existing:
+            continue  # Table doesn't exist yet, skip
         col_names = {row["name"] for row in existing}
         if column not in col_names:
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")

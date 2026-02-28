@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Paper Trader{% endblock %}</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="/static/mobile.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <style>
@@ -66,12 +67,14 @@
         <ul>
             <li><strong>Paper Trader</strong></li>
         </ul>
-        <ul>
+        <button class="nav-toggle" onclick="this.nextElementSibling.classList.toggle('open')" aria-label="Menu">&#9776;</button>
+        <ul class="nav-links">
             <li><a href="/">Dashboard</a></li>
             <li><a href="/decisions">Decisions</a></li>
             <li><a href="/journal">Journal</a></li>
             <li><a href="/api-usage">API Usage</a></li>
             <li><a href="/dry-run">Dry Run</a></li>
+            <li><a href="/settings">Settings</a></li>
         </ul>
     </nav>
     <main class="container">

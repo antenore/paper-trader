@@ -79,14 +79,16 @@ async def execute_buy(
     new_cash = portfolio["cash"] - total_cost
     await queries.update_cash(db, new_cash, is_dry_run=is_dry_run)
 
-    # Update or create position
+    # Update or create position (RULE 005: set stop-loss at entry)
     existing = await queries.get_position_by_symbol(db, symbol, is_dry_run=is_dry_run)
     if existing:
         new_shares = existing["shares"] + shares
         new_avg_cost = (existing["shares"] * existing["avg_cost"] + total_cost) / new_shares
-        await queries.update_position_shares(db, existing["id"], new_shares, new_avg_cost)
+        stop_loss = new_avg_cost * (1 - settings.stop_loss_pct)
+        await queries.update_position_shares(db, existing["id"], new_shares, new_avg_cost, stop_loss_price=stop_loss)
     else:
-        await queries.open_position(db, symbol, shares, price, is_dry_run=is_dry_run)
+        stop_loss = price * (1 - settings.stop_loss_pct)
+        await queries.open_position(db, symbol, shares, price, is_dry_run=is_dry_run, stop_loss_price=stop_loss)
 
     # Record trade
     trade_id = await queries.record_trade(

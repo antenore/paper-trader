@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from paper_trader.config import settings
+from paper_trader.portfolio.tools import check_sector_cap, get_sector
 
 
 def check_risk(
@@ -88,5 +89,14 @@ def check_risk(
 
     if shares < 0.01:
         return {"ok": False, "reason": "Trade too small after risk adjustments"}
+
+    # 5. Sector cap: no sector > sector_cap_pct of portfolio (ETFs/Unknown exempt)
+    sector_check = check_sector_cap(
+        symbol, shares * price, positions,
+        {p["symbol"]: p.get("current_price", p["avg_cost"]) for p in positions},
+        portfolio_value=portfolio_total,
+    )
+    if not sector_check["ok"]:
+        return sector_check
 
     return {"ok": True, "adjusted_shares": shares}

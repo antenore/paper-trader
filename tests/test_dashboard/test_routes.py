@@ -109,3 +109,22 @@ class TestDashboardRoutes:
         tc, db = client
         response = tc.get("/partials/decisions")
         assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_settings_page_200(self, client):
+        tc, db = client
+        response = tc.get("/settings")
+        assert response.status_code == 200
+        assert "Settings" in response.text
+        assert "Budget" in response.text
+
+    @pytest.mark.asyncio
+    async def test_save_config_redirects(self, client):
+        tc, db = client
+        response = tc.post(
+            "/settings/config",
+            data={"config.budget_warn_usd": "40.0"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert "saved=config" in response.headers["location"]

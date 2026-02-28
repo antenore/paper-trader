@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Settings — Paper Trader{% endblock %}
+{% block content %}
+<h2>Settings</h2>
+
+{% if saved == "config" %}
+<div class="alert alert-info">Configuration saved.</div>
+{% elif saved == "schedule" %}
+<div class="alert alert-info">Schedule updated.</div>
+{% elif saved == "error" %}
+<div class="alert alert-danger">Error saving — check your values.</div>
+{% endif %}
+
+<!-- API Budget -->
+<article>
+    <h3>API Budget</h3>
+    <form method="post" action="/settings/config">
+        <div class="grid">
+            <label>
+                Warning threshold (USD)
+                <input type="number" name="config.budget_warn_usd" value="{{ config['config.budget_warn_usd'] }}" step="0.01" min="0">
+                <small>Alert shown on dashboard when monthly spend exceeds this</small>
+            </label>
+            <label>
+                Hard stop (USD)
+                <input type="number" name="config.budget_hard_stop_usd" value="{{ config['config.budget_hard_stop_usd'] }}" step="0.01" min="0">
+                <small>Trading pauses when monthly spend reaches this limit</small>
+            </label>
+        </div>
+        <button type="submit">Save Budget</button>
+    </form>
+</article>
+
+<!-- Risk Parameters -->
+<article>
+    <h3>Risk Parameters</h3>
+    <form method="post" action="/settings/config">
+        <div class="grid">
+            <label>
+                Safety stop (%)
+                <input type="number" name="config.safety_stop_pct" value="{{ config['config.safety_stop_pct'] }}" step="0.01" min="0" max="1">
+                <small>Pause trading if portfolio drops below this fraction of initial cash</small>
+            </label>
+            <label>
+                Max position size (%)
+                <input type="number" name="config.max_position_pct" value="{{ config['config.max_position_pct'] }}" step="0.01" min="0" max="1">
+                <small>No single position may exceed this fraction of total portfolio value</small>
+            </label>
+        </div>
+        <div class="grid">
+            <label>
+                Min cash reserve (CHF)
+                <input type="number" name="config.min_cash_reserve" value="{{ config['config.min_cash_reserve'] }}" step="1" min="0">
+                <small>Always keep at least this much cash available</small>
+            </label>
+            <label>
+                Movement threshold (%)
+                <input type="number" name="config.movement_threshold_pct" value="{{ config['config.movement_threshold_pct'] }}" step="0.1" min="0">
+                <small>Midday check skips AI if no symbol moved more than this</small>
+            </label>
+        </div>
+        <label>
+            Confidence threshold
+            <input type="number" name="config.confidence_threshold" value="{{ config['config.confidence_threshold'] }}" step="0.05" min="0" max="1">
+            <small>Decisions with confidence below this are skipped (0.0 = trade everything, 1.0 = trade nothing)</small>
+        </label>
+        <div class="grid">
+            <label>
+                Stop-loss (%)
+                <input type="number" name="config.stop_loss_pct" value="{{ config['config.stop_loss_pct'] }}" step="0.01" min="0" max="1">
+                <small>Auto-sell when price drops this fraction below entry cost (0.07 = 7%)</small>
+            </label>
+            <label>
+                Sector cap (%)
+                <input type="number" name="config.sector_cap_pct" value="{{ config['config.sector_cap_pct'] }}" step="0.05" min="0" max="1">
+                <small>Max portfolio fraction in one sector (0.60 = 60%)</small>
+            </label>
+        </div>
+        <div class="grid">
+            <label>
+                Session deploy cap (%)
+                <input type="number" name="config.max_session_deploy_pct" value="{{ config['config.max_session_deploy_pct'] }}" step="0.05" min="0" max="1">
+                <small>Max fraction of cash deployed per trading session (0.40 = 40%)</small>
+            </label>
+            <label>
+                Correlation warning
+                <input type="number" name="config.correlation_warn_threshold" value="{{ config['config.correlation_warn_threshold'] }}" step="0.05" min="0" max="1">
+                <small>Warn AI when average position correlation exceeds this (0.75)</small>
+            </label>
+        </div>
+        <button type="submit">Save Risk</button>
+    </form>
+</article>
+
+<!-- Schedule -->
+<article>
+    <h3>Schedule</h3>
+    <form method="post" action="/settings/schedule">
+        <div class="table-responsive">
+        <table>
+            <thead>
+                <tr><th>Job</th><th>Hour</th><th>Minute</th><th>Day of Week</th></tr>
+            </thead>
+            <tbody>
+            {% for s in schedule %}
+                <tr>
+                    <td><strong>{{ s.name }}</strong></td>
+                    <td><input type="number" name="{{ s.job_id }}.hour" value="{{ s.hour }}" min="0" max="23" style="width:5rem"></td>
+                    <td><input type="number" name="{{ s.job_id }}.minute" value="{{ s.minute }}" min="0" max="59" style="width:5rem"></td>
+                    <td><input type="text" name="{{ s.job_id }}.day_of_week" value="{{ s.day_of_week|default('mon-fri', true) }}" style="width:8rem">
+                        {% if s.day is defined %}
+                        <input type="text" name="{{ s.job_id }}.day" value="{{ s.day }}" style="width:5rem" placeholder="day">
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        <button type="submit">Save Schedule</button>
+    </form>
+</article>
+
+<!-- Other -->
+<article>
+    <h3>Other</h3>
+    <form method="post" action="/settings/config">
+        <div class="grid">
+            <label>
+                Timezone
+                <input type="text" name="config.timezone" value="{{ config['config.timezone'] }}">
+            </label>
+            <label>
+                Benchmark symbol
+                <input type="text" name="config.benchmark_symbol" value="{{ config['config.benchmark_symbol'] }}">
+            </label>
+        </div>
+        <label>
+            Default watchlist
+            <input type="text" name="config.default_watchlist" value="{{ config['config.default_watchlist'] }}">
+            <small>Comma-separated list of ticker symbols</small>
+        </label>
+        <button type="submit">Save Other</button>
+    </form>
+</article>
+{% endblock %}

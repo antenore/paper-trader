@@ -53,25 +53,38 @@
 </article>
 {% endif %}
 
+<article>
+    <h3>Scheduler</h3>
+    <div id="scheduler-status" class="stat-grid">
+        <p>Loading job statuses...</p>
+    </div>
+</article>
+
 <div class="grid">
     <article>
         <h3>Open Positions</h3>
         {% if positions %}
+        <div class="table-responsive">
         <table>
             <thead>
-                <tr><th>Symbol</th><th>Shares</th><th>Avg Cost</th><th>Opened</th></tr>
+                <tr><th>Symbol</th><th>Sector</th><th>Shares</th><th>Avg Cost</th><th>Current</th><th>P&L%</th><th>Stop-Loss</th><th>Opened</th></tr>
             </thead>
             <tbody>
             {% for p in positions %}
                 <tr>
                     <td><strong>{{ p.symbol }}</strong></td>
+                    <td><small>{{ p.sector }}</small></td>
                     <td>{{ "%.2f"|format(p.shares) }}</td>
                     <td>${{ "%.2f"|format(p.avg_cost) }}</td>
+                    <td>${{ "%.2f"|format(p.current_price) }}</td>
+                    <td class="{% if p.pnl_pct >= 0 %}text-success{% else %}text-danger{% endif %}">{{ "%+.1f"|format(p.pnl_pct) }}%</td>
+                    <td>{% if p.stop_loss_price %}${{ "%.2f"|format(p.stop_loss_price) }} <small>({{ "%.1f"|format(p.stop_distance_pct) }}%)</small>{% else %}&mdash;{% endif %}</td>
                     <td>{{ p.opened_at[:10] }}</td>
                 </tr>
             {% endfor %}
             </tbody>
         </table>
+        </div>
         {% else %}
         <p>No open positions.</p>
         {% endif %}
@@ -80,6 +93,7 @@
     <article>
         <h3>Latest Decisions</h3>
         {% if decisions %}
+        <div class="table-responsive">
         <table>
             <thead>
                 <tr><th>Symbol</th><th>Action</th><th>Confidence</th><th>Time</th></tr>
@@ -95,12 +109,21 @@
             {% endfor %}
             </tbody>
         </table>
+        </div>
         <a href="/decisions">View all &rarr;</a>
         {% else %}
         <p>No decisions yet.</p>
         {% endif %}
     </article>
 </div>
+{% if sector_exposure %}
+<article>
+    <h3>Sector Allocation</h3>
+    <div style="max-width:400px;margin:auto">
+        <canvas id="sector-chart"></canvas>
+    </div>
+</article>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -141,6 +164,39 @@ new Chart(ctx, {
         scales: {
             y: { beginAtZero: false },
         }
+    }
+});
+</script>
+{% endif %}
+{% if sector_exposure %}
+<script>
+const sectorColors = [
+    '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
+    '#ec4899', '#06b6d4', '#f97316', '#14b8a6', '#6366f1',
+    '#84cc16', '#a855f7',
+];
+const sectorCtx = document.getElementById('sector-chart').getContext('2d');
+new Chart(sectorCtx, {
+    type: 'doughnut',
+    data: {
+        labels: {{ sector_exposure.keys() | list | tojson }},
+        datasets: [{
+            data: [{% for s, d in sector_exposure.items() %}{{ "%.2f"|format(d.pct) }}{% if not loop.last %}, {% endif %}{% endfor %}],
+            backgroundColor: sectorColors.slice(0, {{ sector_exposure | length }}),
+        }],
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: { position: 'bottom' },
+            tooltip: {
+                callbacks: {
+                    label: function(ctx) {
+                        return ctx.label + ': ' + ctx.parsed.toFixed(1) + '%';
+                    }
+                }
+            },
+        },
     }
 });
 </script>

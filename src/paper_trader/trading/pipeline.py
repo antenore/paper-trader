@@ -13,6 +13,7 @@ from paper_trader.config import settings
 from paper_trader.db import queries
 from paper_trader.market.prices import MarketDataProvider
 from paper_trader.portfolio.manager import execute_buy, execute_sell, get_portfolio_value
+from paper_trader.portfolio.tools import check_etf_overlap, check_stop_losses
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,12 @@ async def run_trading_pipeline(
     result: dict[str, Any] = {"run_type": run_type, "trades": [], "errors": []}
 
     try:
+        # Step 0: Auto-execute stop-losses before AI analysis
+        if run_type != "snapshot":
+            stop_trades = await _execute_stop_losses(db, market, is_dry_run)
+            if stop_trades:
+                result["trades"].extend(stop_trades)
+
         if run_type == "snapshot":
             await _take_snapshot(db, market, is_dry_run)
             result["snapshot"] = True
@@ -65,16 +72,40 @@ async def run_trading_pipeline(
             result["errors"].append(f"Analysis skipped: {e}")
             return result
 
-        # Step 3: Execute decisions
+        # Step 3: Execute decisions (with RULE 001 session budget + RULE 003 ETF overlap)
+        portfolio_for_budget = await queries.get_portfolio(db, is_dry_run=is_dry_run)
+        session_budget = (portfolio_for_budget["cash"] * settings.max_session_deploy_pct) if portfolio_for_budget else 0
+        session_spent = 0.0
+        position_symbols = [p["symbol"] for p in await queries.get_open_positions(db, is_dry_run=is_dry_run)]
+
         for decision in analysis.decisions:
             if decision.action == "HOLD":
                 continue
-            if decision.confidence < 0.4:
-                logger.info("Skipping %s %s (confidence %.2f < 0.4)", decision.action, decision.symbol, decision.confidence)
+            if decision.confidence < settings.confidence_threshold:
+                logger.info("Skipping %s %s (confidence %.2f < %.2f)", decision.action, decision.symbol, decision.confidence, settings.confidence_threshold)
                 continue
+
+            # RULE 003: ETF overlap check for BUY decisions
+            if decision.action == "BUY":
+                overlap = check_etf_overlap(decision.symbol, position_symbols)
+                if overlap:
+                    logger.info("Skipping BUY %s: ETF overlap — %s", decision.symbol, overlap)
+                    result["trades"].append({"symbol": decision.symbol, "action": "BUY", "skipped": f"ETF overlap: {overlap}"})
+                    continue
+
+                # RULE 001: Session budget check
+                if session_spent >= session_budget:
+                    logger.info("Skipping BUY %s: session budget exhausted (%.2f/%.2f)", decision.symbol, session_spent, session_budget)
+                    result["trades"].append({"symbol": decision.symbol, "action": "BUY", "skipped": "Session budget exhausted"})
+                    continue
 
             trade_result = await _execute_decision(db, market, decision, is_dry_run)
             result["trades"].append(trade_result)
+
+            # Track session spend for BUYs
+            if decision.action == "BUY" and trade_result.get("ok"):
+                session_spent += trade_result.get("total", 0)
+                position_symbols.append(decision.symbol)
 
         # Step 4: Take snapshot
         await _take_snapshot(db, market, is_dry_run)
@@ -198,3 +229,42 @@ async def _take_snapshot(
         db, pv["cash"], pv["positions_value"], is_dry_run,
         spy_price=spy_price, benchmark_value=benchmark_value,
     )
+
+
+async def _execute_stop_losses(
+    db: aiosqlite.Connection,
+    market: MarketDataProvider,
+    is_dry_run: bool,
+) -> list[dict[str, Any]]:
+    """Step 0: Check and auto-execute stop-losses before AI analysis."""
+    positions = await queries.get_open_positions(db, is_dry_run=is_dry_run)
+    if not positions:
+        return []
+
+    symbols = [p["symbol"] for p in positions]
+    prices = await market.get_current_prices(symbols)
+    triggered = check_stop_losses(positions, prices)
+
+    results = []
+    for stop in triggered:
+        # Record a system decision
+        decision_id = await queries.record_decision(
+            db,
+            stop["symbol"],
+            "SELL",
+            1.0,
+            f"Stop-loss triggered: price ${stop['current_price']:.2f} <= stop ${stop['stop_loss_price']:.2f} ({stop['loss_pct']:.1f}%)",
+            "system/stop-loss",
+            is_dry_run=is_dry_run,
+        )
+        result = await execute_sell(
+            db, stop["symbol"], stop["shares"], stop["current_price"],
+            decision_id, is_dry_run,
+        )
+        logger.warning(
+            "STOP-LOSS %s: sold %.2f shares @ $%.2f (stop: $%.2f)",
+            stop["symbol"], stop["shares"], stop["current_price"], stop["stop_loss_price"],
+        )
+        results.append({"symbol": stop["symbol"], "stop_loss": True, **result})
+
+    return results

@@ -38,6 +38,10 @@ async def lifespan(app: FastAPI):
 
     logger.info("Database initialized, portfolio ready (%.2f %s)", settings.initial_cash_chf, settings.currency)
 
+    # Load saved config overrides from DB
+    from paper_trader.config import load_config_from_db
+    await load_config_from_db(db)
+
     # Start scheduler
     try:
         from paper_trader.scheduler.jobs import start_scheduler, stop_scheduler

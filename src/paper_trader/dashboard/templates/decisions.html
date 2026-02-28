@@ -4,6 +4,7 @@
 <h2>Decision Log</h2>
 
 {% if decisions %}
+<div class="table-responsive">
 <table>
     <thead>
         <tr>
@@ -28,6 +29,7 @@
     {% endfor %}
     </tbody>
 </table>
+</div>
 {% else %}
 <p>No decisions recorded yet.</p>
 {% endif %}
