@@ -122,6 +122,8 @@ MIGRATIONS = [
     ("portfolio_snapshots", "spy_price", "REAL"),
     ("portfolio_snapshots", "benchmark_value", "REAL"),
     ("positions", "stop_loss_price", "REAL"),
+    ("watchlist", "risk_tier", "TEXT DEFAULT 'growth'"),
+    ("positions", "risk_tier", "TEXT DEFAULT 'growth'"),
 ]
 
 

@@ -1,22 +1,50 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup
 from pathlib import Path
 
+from paper_trader.ai.client import AIClient
+from paper_trader.config import settings, CONFIG_KEYS, _serialize_list, save_config_to_db
+from paper_trader.dashboard.csrf import csrf_token
 from paper_trader.db.connection import get_db
 from paper_trader.db import queries
-from paper_trader.config import settings
+from paper_trader.market.prices import LiveDataProvider
 from paper_trader.portfolio.tools import get_sector, get_sector_exposure
+from paper_trader.scheduler.jobs import (
+    get_current_schedule,
+    get_job_statuses,
+    reschedule_job,
+    SCHEDULE,
+    trigger_job,
+)
+from paper_trader.trading.dry_run import reset_for_live, run_dry_run
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+def _csrf_hidden(request: Request) -> str:
+    """Return an HTML hidden input with the CSRF token."""
+    token = csrf_token(request)
+    return Markup(f'<input type="hidden" name="csrf_token" value="{token}">')
+
+
+def _ctx(request: Request, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build template context with common variables (CSRF, etc.)."""
+    ctx: dict[str, Any] = {"csrf_hidden": _csrf_hidden(request)}
+    if extra:
+        ctx.update(extra)
+    return ctx
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -35,7 +63,6 @@ async def index(request: Request):
     enriched_positions = []
     prices: dict[str, float] = {}
     if positions:
-        from paper_trader.market.prices import LiveDataProvider
         try:
             market = LiveDataProvider()
             symbols = [p["symbol"] for p in positions]
@@ -55,6 +82,13 @@ async def index(request: Request):
             "stop_distance_pct": stop_dist,
         })
 
+    # Total portfolio value = cash + market value of all positions
+    positions_value = sum(
+        prices.get(p["symbol"], p["avg_cost"]) * p["shares"]
+        for p in positions
+    ) if positions else 0.0
+    total_value = (portfolio["cash"] if portfolio else 0.0) + positions_value
+
     # Sector exposure for doughnut chart
     sector_exposure = get_sector_exposure(positions, prices) if positions else {}
 
@@ -66,7 +100,7 @@ async def index(request: Request):
     # Only pass benchmark if at least one non-None value exists
     has_benchmark = any(v is not None for v in benchmark_values)
 
-    return templates.TemplateResponse(request, "index.html", {
+    return templates.TemplateResponse(request, "index.html", _ctx(request, {
         "portfolio": portfolio,
         "positions": enriched_positions,
         "snapshots": snapshots,
@@ -80,16 +114,29 @@ async def index(request: Request):
         "equity_dates": equity_dates,
         "equity_values": equity_values,
         "benchmark_values": benchmark_values if has_benchmark else [],
+        "total_value": total_value,
         "sector_exposure": sector_exposure,
-    })
+    }))
 
 
 @router.get("/decisions", response_class=HTMLResponse)
 async def decisions_page(request: Request):
+    per_page = 50
+    try:
+        page = max(1, int(request.query_params.get("page", "1")))
+    except ValueError:
+        page = 1
+    offset = (page - 1) * per_page
+
     db = await get_db()
-    decisions = await queries.get_decisions(db, limit=100)
+    total = await queries.count_decisions(db)
+    decisions = await queries.get_decisions(db, limit=per_page, offset=offset)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
     return templates.TemplateResponse(request, "decisions.html", {
         "decisions": decisions,
+        "page": page,
+        "total_pages": total_pages,
     })
 
 
@@ -121,10 +168,10 @@ async def api_usage_page(request: Request):
 async def dry_run_page(request: Request):
     db = await get_db()
     sessions = await queries.get_dry_run_sessions(db)
-    return templates.TemplateResponse(request, "dry_run.html", {
+    return templates.TemplateResponse(request, "dry_run.html", _ctx(request, {
         "sessions": sessions,
         "default_symbols": settings.default_watchlist,
-    })
+    }))
 
 
 @router.post("/resume-trading")
@@ -138,7 +185,6 @@ async def resume_trading():
 
 @router.post("/go-live")
 async def go_live():
-    from paper_trader.trading.dry_run import reset_for_live
     db = await get_db()
     await reset_for_live(db)
     logger.info("Switched to live mode via dashboard")
@@ -148,23 +194,25 @@ async def go_live():
 @router.post("/start-dry-run")
 async def start_dry_run_handler():
     """Start a dry run in the background."""
-    import asyncio
-    from paper_trader.ai.client import AIClient
-    from paper_trader.trading.dry_run import run_dry_run
-
     db = await get_db()
     ai_client = AIClient(db)
-    asyncio.create_task(run_dry_run(db, ai_client))
+    task = asyncio.create_task(run_dry_run(db, ai_client))
+    task.add_done_callback(_log_task_result)
     return RedirectResponse(url="/dry-run", status_code=303)
+
+
+def _log_task_result(task: asyncio.Task) -> None:
+    """Log exceptions from background tasks instead of silently dropping them."""
+    if task.cancelled():
+        logger.warning("Background task %s was cancelled", task.get_name())
+    elif exc := task.exception():
+        logger.error("Background task %s failed: %s", task.get_name(), exc, exc_info=exc)
 
 
 # ── Settings ─────────────────────────────────────────────────────────
 
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
-    from paper_trader.config import CONFIG_KEYS, _serialize_list
-    from paper_trader.scheduler.jobs import get_current_schedule
-
     current = {}
     for db_key, (attr_name, type_conv) in CONFIG_KEYS.items():
         val = getattr(settings, attr_name)
@@ -176,17 +224,15 @@ async def settings_page(request: Request):
     schedule = get_current_schedule()
     saved = request.query_params.get("saved")
 
-    return templates.TemplateResponse(request, "settings.html", {
+    return templates.TemplateResponse(request, "settings.html", _ctx(request, {
         "config": current,
         "schedule": schedule,
         "saved": saved,
-    })
+    }))
 
 
 @router.post("/settings/config")
 async def save_config(request: Request):
-    from paper_trader.config import CONFIG_KEYS, save_config_to_db
-
     db = await get_db()
     form = await request.form()
 
@@ -202,9 +248,6 @@ async def save_config(request: Request):
 
 @router.post("/settings/schedule")
 async def save_schedule(request: Request):
-    import json
-    from paper_trader.scheduler.jobs import SCHEDULE, reschedule_job
-
     db = await get_db()
     form = await request.form()
 
@@ -241,15 +284,13 @@ async def save_schedule(request: Request):
 
 @router.post("/trigger/{job_id}")
 async def trigger_job_route(job_id: str):
-    from paper_trader.scheduler.jobs import trigger_job
     success, message = trigger_job(job_id)
     status_code = 200 if success else 409
-    return {"success": success, "message": message}
+    return JSONResponse({"success": success, "message": message}, status_code=status_code)
 
 
 @router.get("/api/job-status")
 async def job_status():
-    from paper_trader.scheduler.jobs import get_job_statuses
     return get_job_statuses()
 
 
@@ -260,9 +301,30 @@ async def partial_portfolio(request: Request):
     db = await get_db()
     portfolio = await queries.get_portfolio(db)
     positions = await queries.get_open_positions(db)
+
+    enriched = []
+    prices: dict[str, float] = {}
+    if positions:
+        try:
+            market = LiveDataProvider()
+            prices = await market.get_current_prices([p["symbol"] for p in positions])
+        except Exception:
+            pass
+    for p in positions:
+        cp = prices.get(p["symbol"], p["avg_cost"])
+        pnl = (cp / p["avg_cost"] - 1) * 100 if p["avg_cost"] > 0 else 0
+        stop = p.get("stop_loss_price")
+        enriched.append({
+            **p,
+            "sector": get_sector(p["symbol"]),
+            "current_price": cp,
+            "pnl_pct": pnl,
+            "stop_distance_pct": ((cp - stop) / cp * 100) if stop and cp > 0 else None,
+        })
+
     return templates.TemplateResponse(request, "partials/portfolio.html", {
         "portfolio": portfolio,
-        "positions": positions,
+        "positions": enriched,
     })
 
 

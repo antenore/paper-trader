@@ -50,8 +50,9 @@ async def run_screening(
     if not is_dry_run:
         for update in result.watchlist_updates:
             if update.action == "ADD":
-                await queries.add_to_watchlist(db, update.symbol, update.reason)
-                logger.info("Watchlist ADD: %s (%s)", update.symbol, update.reason)
+                tier = update.risk_tier if update.risk_tier in ("growth", "moonshot") else "growth"
+                await queries.add_to_watchlist(db, update.symbol, update.reason, risk_tier=tier)
+                logger.info("Watchlist ADD: %s [%s] (%s)", update.symbol, tier, update.reason)
             elif update.action == "REMOVE":
                 await queries.remove_from_watchlist(db, update.symbol)
                 logger.info("Watchlist REMOVE: %s (%s)", update.symbol, update.reason)

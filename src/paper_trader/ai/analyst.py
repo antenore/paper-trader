@@ -8,7 +8,7 @@ import aiosqlite
 from paper_trader.ai.client import AIClient
 from paper_trader.ai.models import AnalysisResult, StockDecision
 from paper_trader.ai.prompts import ANALYSIS_SYSTEM, analysis_prompt
-from paper_trader.config import MODEL_HAIKU
+from paper_trader.config import MODEL_SONNET
 from paper_trader.db import queries
 from paper_trader.market.news import fetch_symbol_news, format_news_for_ai
 from paper_trader.market.prices import MarketDataProvider
@@ -25,9 +25,10 @@ async def run_analysis(
     is_dry_run: bool = False,
 ) -> AnalysisResult:
     """Run intraday analysis on watchlist and open positions."""
-    # Gather all symbols to analyze
+    # Gather all symbols to analyze (with tier info)
     watchlist = await queries.get_watchlist(db)
     watchlist_symbols = [w["symbol"] for w in watchlist]
+    watchlist_tiers = {w["symbol"]: w.get("risk_tier", "growth") or "growth" for w in watchlist}
 
     positions = await queries.get_open_positions(db, is_dry_run=is_dry_run)
     position_symbols = [p["symbol"] for p in positions]
@@ -80,9 +81,9 @@ async def run_analysis(
 
     # Call AI
     raw = await ai_client.call(
-        model=MODEL_HAIKU,
+        model=MODEL_SONNET,
         system=ANALYSIS_SYSTEM,
-        prompt=analysis_prompt(portfolio_summary, watchlist_symbols, price_data, news_text, tools_context=tools_context),
+        prompt=analysis_prompt(portfolio_summary, watchlist_symbols, price_data, news_text, tools_context=tools_context, watchlist_tiers=watchlist_tiers),
         purpose="analysis",
         is_dry_run=is_dry_run,
     )
@@ -97,7 +98,7 @@ async def run_analysis(
             decision.action,
             decision.confidence,
             decision.reasoning,
-            MODEL_HAIKU,
+            MODEL_SONNET,
             is_dry_run=is_dry_run,
         )
 

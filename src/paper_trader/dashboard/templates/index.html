@@ -1,13 +1,17 @@
 {% extends "base.html" %}
 {% block title %}Dashboard — Paper Trader{% endblock %}
+{% block head_scripts %}
+<script defer src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+{% endblock %}
 {% block content %}
 <h2>Dashboard</h2>
 
 {% if api_paused %}
 <div class="alert alert-danger">
     <strong>Trading Paused</strong> — {{ pause_reason }}
-    <form method="post" action="/resume-trading" style="display:inline">
-        <button type="submit" class="outline" style="margin-left:1rem;padding:0.3rem 0.8rem">Resume Trading</button>
+    <form method="post" action="/resume-trading" style="display:inline" onsubmit="return confirm('Resume trading? The bot will start making decisions again.')">
+        {{ csrf_hidden }}
+        <button type="submit" class="outline btn-inline">Resume Trading</button>
     </form>
 </div>
 {% endif %}
@@ -30,10 +34,7 @@
     </div>
     <div class="stat-card">
         <div class="label">Total Value</div>
-        <div class="value">
-            {% set total = portfolio.cash %}
-            {{ "%.2f"|format(total) }} CHF
-        </div>
+        <div class="value">{{ "%.2f"|format(total_value) }} CHF</div>
     </div>
     {% endif %}
     <div class="stat-card">
@@ -49,7 +50,7 @@
 {% if equity_values %}
 <article>
     <h3>Equity Curve</h3>
-    <canvas id="equity-chart"></canvas>
+    <canvas id="equity-chart" role="img" aria-label="Equity curve chart showing portfolio value over time">Your browser does not support canvas.</canvas>
 </article>
 {% endif %}
 
@@ -67,17 +68,18 @@
         <div class="table-responsive">
         <table>
             <thead>
-                <tr><th>Symbol</th><th>Sector</th><th>Shares</th><th>Avg Cost</th><th>Current</th><th>P&L%</th><th>Stop-Loss</th><th>Opened</th></tr>
+                <tr><th>Symbol</th><th>Tier</th><th>Sector</th><th>Shares</th><th>Avg Cost</th><th>Current</th><th>P&L%</th><th>Stop-Loss</th><th>Opened</th></tr>
             </thead>
             <tbody>
             {% for p in positions %}
                 <tr>
                     <td><strong>{{ p.symbol }}</strong></td>
+                    <td><span class="badge badge-{{ p.risk_tier|default('growth') }}">{{ p.risk_tier|default('growth') }}</span></td>
                     <td><small>{{ p.sector }}</small></td>
                     <td>{{ "%.2f"|format(p.shares) }}</td>
                     <td>${{ "%.2f"|format(p.avg_cost) }}</td>
                     <td>${{ "%.2f"|format(p.current_price) }}</td>
-                    <td class="{% if p.pnl_pct >= 0 %}text-success{% else %}text-danger{% endif %}">{{ "%+.1f"|format(p.pnl_pct) }}%</td>
+                    <td class="{% if p.pnl_pct >= 0 %}positive{% else %}negative{% endif %}">{{ "%+.1f"|format(p.pnl_pct) }}%</td>
                     <td>{% if p.stop_loss_price %}${{ "%.2f"|format(p.stop_loss_price) }} <small>({{ "%.1f"|format(p.stop_distance_pct) }}%)</small>{% else %}&mdash;{% endif %}</td>
                     <td>{{ p.opened_at[:10] }}</td>
                 </tr>
@@ -119,85 +121,129 @@
 {% if sector_exposure %}
 <article>
     <h3>Sector Allocation</h3>
-    <div style="max-width:400px;margin:auto">
-        <canvas id="sector-chart"></canvas>
+    <div class="chart-sm">
+        <canvas id="sector-chart" role="img" aria-label="Sector allocation doughnut chart">Your browser does not support canvas.</canvas>
     </div>
 </article>
 {% endif %}
 {% endblock %}
 
 {% block scripts %}
-{% if equity_values %}
+{% if equity_values or sector_exposure %}
 <script>
-const ctx = document.getElementById('equity-chart').getContext('2d');
-const datasets = [{
-    label: 'Portfolio Value (CHF)',
-    data: {{ equity_values | tojson }},
-    borderColor: '#3b82f6',
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-    fill: true,
-    tension: 0.3,
-}];
-{% if benchmark_values %}
-datasets.push({
-    label: 'SPY Buy & Hold (CHF)',
-    data: {{ benchmark_values | tojson }},
-    borderColor: '#f59e0b',
-    backgroundColor: 'transparent',
-    borderDash: [6, 3],
-    fill: false,
-    tension: 0.3,
-    spanGaps: true,
-});
-{% endif %}
-new Chart(ctx, {
-    type: 'line',
-    data: {
-        labels: {{ equity_dates | tojson }},
-        datasets: datasets,
-    },
-    options: {
-        responsive: true,
-        plugins: {
-            legend: { display: datasets.length > 1 },
+document.addEventListener('DOMContentLoaded', () => {
+{% if equity_values %}
+    const equityCtx = document.getElementById('equity-chart').getContext('2d');
+    const datasets = [{
+        label: 'Portfolio Value (CHF)',
+        data: {{ equity_values | tojson }},
+        borderColor: '#e2a93b',
+        backgroundColor: 'rgba(226, 169, 59, 0.08)',
+        borderWidth: 2,
+        fill: true,
+        tension: 0.35,
+        pointRadius: 0,
+        pointHitRadius: 8,
+    }];
+    {% if benchmark_values %}
+    datasets.push({
+        label: 'SPY Buy & Hold (CHF)',
+        data: {{ benchmark_values | tojson }},
+        borderColor: '#6b7688',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        borderDash: [5, 4],
+        fill: false,
+        tension: 0.35,
+        pointRadius: 0,
+        spanGaps: true,
+    });
+    {% endif %}
+    new Chart(equityCtx, {
+        type: 'line',
+        data: {
+            labels: {{ equity_dates | tojson }},
+            datasets: datasets,
         },
-        scales: {
-            y: { beginAtZero: false },
+        options: {
+            responsive: true,
+            interaction: { intersect: false, mode: 'index' },
+            plugins: {
+                legend: {
+                    display: datasets.length > 1,
+                    labels: { color: '#6b7688', font: { family: 'DM Mono', size: 11 } },
+                },
+                tooltip: {
+                    backgroundColor: '#1a1f2e',
+                    borderColor: '#2a3040',
+                    borderWidth: 1,
+                    titleFont: { family: 'DM Mono', size: 12 },
+                    bodyFont: { family: 'DM Mono', size: 12 },
+                    titleColor: '#c9d1d9',
+                    bodyColor: '#e2a93b',
+                    padding: 10,
+                    cornerRadius: 6,
+                },
+            },
+            scales: {
+                x: {
+                    grid: { color: 'rgba(42, 48, 64, 0.5)' },
+                    ticks: { color: '#6b7688', font: { family: 'DM Mono', size: 10 }, maxTicksLimit: 10 },
+                },
+                y: {
+                    beginAtZero: false,
+                    grid: { color: 'rgba(42, 48, 64, 0.5)' },
+                    ticks: { color: '#6b7688', font: { family: 'DM Mono', size: 10 } },
+                },
+            }
         }
-    }
-});
-</script>
+    });
 {% endif %}
 {% if sector_exposure %}
-<script>
-const sectorColors = [
-    '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
-    '#ec4899', '#06b6d4', '#f97316', '#14b8a6', '#6366f1',
-    '#84cc16', '#a855f7',
-];
-const sectorCtx = document.getElementById('sector-chart').getContext('2d');
-new Chart(sectorCtx, {
-    type: 'doughnut',
-    data: {
-        labels: {{ sector_exposure.keys() | list | tojson }},
-        datasets: [{
-            data: [{% for s, d in sector_exposure.items() %}{{ "%.2f"|format(d.pct) }}{% if not loop.last %}, {% endif %}{% endfor %}],
-            backgroundColor: sectorColors.slice(0, {{ sector_exposure | length }}),
-        }],
-    },
-    options: {
-        responsive: true,
-        plugins: {
-            legend: { position: 'bottom' },
-            tooltip: {
-                callbacks: {
-                    label: function(ctx) {
-                        return ctx.label + ': ' + ctx.parsed.toFixed(1) + '%';
-                    }
-                }
-            },
+    const sectorColors = [
+        '#e2a93b', '#58a6ff', '#3fb950', '#f85149', '#bc8cff',
+        '#f778ba', '#39c5cf', '#d2a8ff', '#79c0ff', '#56d364',
+        '#ffa657', '#ff7b72',
+    ];
+    const sectorCtx = document.getElementById('sector-chart').getContext('2d');
+    new Chart(sectorCtx, {
+        type: 'doughnut',
+        data: {
+            labels: {{ sector_exposure.keys() | list | tojson }},
+            datasets: [{
+                data: [{% for s, d in sector_exposure.items() %}{{ "%.2f"|format(d.pct) }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                backgroundColor: sectorColors.slice(0, {{ sector_exposure | length }}),
+                borderColor: '#0f1419',
+                borderWidth: 2,
+            }],
         },
-    }
+        options: {
+            responsive: true,
+            cutout: '65%',
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    labels: { color: '#6b7688', font: { family: 'DM Mono', size: 11 }, padding: 16 },
+                },
+                tooltip: {
+                    backgroundColor: '#1a1f2e',
+                    borderColor: '#2a3040',
+                    borderWidth: 1,
+                    titleFont: { family: 'DM Mono', size: 12 },
+                    bodyFont: { family: 'DM Mono', size: 12 },
+                    titleColor: '#c9d1d9',
+                    bodyColor: '#e2a93b',
+                    cornerRadius: 6,
+                    callbacks: {
+                        label: function(item) {
+                            return ' ' + item.label + ': ' + item.parsed.toFixed(1) + '%';
+                        }
+                    }
+                },
+            },
+        }
+    });
+{% endif %}
 });
 </script>
 {% endif %}

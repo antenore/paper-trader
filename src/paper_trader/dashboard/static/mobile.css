@@ -10,7 +10,11 @@
     padding: 0.25rem 0.5rem;
     margin: 0;
     line-height: 1;
-    color: var(--pico-color);
+    color: var(--pt-text-muted);
+    transition: color 0.15s;
+}
+.nav-toggle:hover {
+    color: var(--pt-accent);
 }
 
 /* ── Table horizontal scroll ──────────────────────────────────────── */
@@ -29,7 +33,9 @@
         display: none;
         flex-direction: column;
         width: 100%;
-        padding: 0;
+        padding: 0.5rem 0 0;
+        border-top: 1px solid var(--pt-border);
+        margin-top: 0.5rem;
     }
 
     .nav-links.open {
@@ -39,7 +45,12 @@
     .nav-links li {
         width: 100%;
         text-align: center;
-        padding: 0.4rem 0;
+        padding: 0.3rem 0;
+    }
+
+    .nav-links a {
+        display: block;
+        padding: 0.5rem 1rem !important;
     }
 
     nav {
@@ -60,11 +71,11 @@
     }
 
     .stat-card .value {
-        font-size: 1.4rem;
+        font-size: 1.3rem;
     }
 
     .stat-card .label {
-        font-size: 0.75rem;
+        font-size: 0.7rem;
     }
 
     #equity-chart {
@@ -88,11 +99,11 @@
     }
 
     .stat-card .value {
-        font-size: 1.1rem;
+        font-size: 1.05rem;
     }
 
     .stat-card .label {
-        font-size: 0.7rem;
+        font-size: 0.65rem;
     }
 
     :root {
@@ -100,7 +111,11 @@
     }
 
     main.container {
-        padding-left: 0.5rem;
-        padding-right: 0.5rem;
+        padding-left: 0.75rem;
+        padding-right: 0.75rem;
+    }
+
+    h2 {
+        font-size: 1.3rem;
     }
 }

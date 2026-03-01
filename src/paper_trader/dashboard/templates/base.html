@@ -1,87 +1,349 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Paper Trader{% endblock %}</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/mobile.css">
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    {% block head_scripts %}{% endblock %}
     <style>
+        /* ── Foundation ───────────────────────────────────────────── */
         :root {
-            --pico-font-size: 16px;
+            --pt-bg: #0f1419;
+            --pt-surface: #1a1f2e;
+            --pt-surface-hover: #222839;
+            --pt-border: #2a3040;
+            --pt-border-subtle: #1e2433;
+            --pt-text: #c9d1d9;
+            --pt-text-muted: #6b7688;
+            --pt-text-bright: #e6edf3;
+            --pt-accent: #e2a93b;
+            --pt-accent-dim: rgba(226, 169, 59, 0.15);
+            --pt-positive: #3fb950;
+            --pt-negative: #f85149;
+            --pt-warning: #d29922;
+            --pt-info: #58a6ff;
+            --pt-buy-bg: rgba(63, 185, 80, 0.15); --pt-buy-fg: #3fb950;
+            --pt-sell-bg: rgba(248, 81, 73, 0.15); --pt-sell-fg: #f85149;
+            --pt-hold-bg: rgba(107, 118, 136, 0.15); --pt-hold-fg: #8b949e;
+            --pt-running-bg: rgba(88, 166, 255, 0.15); --pt-running-fg: #58a6ff;
+            --pt-done-bg: rgba(63, 185, 80, 0.15); --pt-done-fg: #3fb950;
+            --pt-info-bg: rgba(88, 166, 255, 0.1); --pt-info-border: #264d73; --pt-info-fg: #79c0ff;
+            --pt-warn-bg: rgba(210, 153, 34, 0.1); --pt-warn-border: #5c4813; --pt-warn-fg: #e3b341;
+            --pt-danger-bg: rgba(248, 81, 73, 0.1); --pt-danger-border: #6e3630; --pt-danger-fg: #ffa198;
+
+            /* Pico overrides */
+            --pico-font-size: 15px;
+            --pico-font-family: 'DM Sans', system-ui, sans-serif;
+            --pico-background-color: var(--pt-bg);
+            --pico-card-background-color: var(--pt-surface);
+            --pico-card-border-color: var(--pt-border);
+            --pico-card-sectioning-background-color: var(--pt-surface);
+            --pico-muted-color: var(--pt-text-muted);
+            --pico-muted-border-color: var(--pt-border);
+            --pico-color: var(--pt-text);
+            --pico-h1-color: var(--pt-text-bright);
+            --pico-h2-color: var(--pt-text-bright);
+            --pico-h3-color: var(--pt-text-bright);
+            --pico-primary: var(--pt-accent);
+            --pico-primary-hover: #c99430;
+            --pico-border-radius: 8px;
         }
+
+        /* ── Typography ───────────────────────────────────────────── */
+        body {
+            background: var(--pt-bg);
+            color: var(--pt-text);
+            font-feature-settings: 'kern' 1, 'liga' 1;
+        }
+        h2 {
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 1.5rem;
+            color: var(--pt-text-bright);
+        }
+        h3 {
+            font-weight: 500;
+            font-size: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--pt-text-muted);
+            margin-bottom: 1rem;
+        }
+        .mono {
+            font-family: 'DM Mono', 'Menlo', monospace;
+        }
+        table td, table th {
+            font-size: 0.875rem;
+        }
+        table td strong {
+            color: var(--pt-text-bright);
+            font-family: 'DM Mono', monospace;
+            letter-spacing: 0.03em;
+        }
+
+        /* ── Navigation ───────────────────────────────────────────── */
         nav {
-            padding: 0.5rem 1rem;
+            padding: 0.6rem 1.25rem;
+            border-bottom: 1px solid var(--pt-border);
+            background: var(--pt-surface);
         }
+        nav ul li strong {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.9rem;
+            color: var(--pt-accent);
+            letter-spacing: 0.05em;
+        }
+        nav .nav-links a {
+            font-size: 0.85rem;
+            color: var(--pt-text-muted);
+            text-decoration: none;
+            padding: 0.3rem 0.6rem;
+            border-radius: 6px;
+            transition: color 0.15s, background 0.15s;
+        }
+        nav .nav-links a:hover {
+            color: var(--pt-text);
+            background: var(--pt-surface-hover);
+        }
+        nav a[aria-current="page"] {
+            font-weight: 500;
+            color: var(--pt-accent) !important;
+            background: var(--pt-accent-dim);
+            text-decoration: none;
+        }
+
+        /* ── Stat Cards ───────────────────────────────────────────── */
         .stat-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 1rem;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 0.75rem;
             margin-bottom: 1.5rem;
         }
         .stat-card {
-            background: var(--pico-card-background-color);
-            border: 1px solid var(--pico-muted-border-color);
-            border-radius: var(--pico-border-radius);
-            padding: 1rem;
+            background: var(--pt-surface);
+            border: 1px solid var(--pt-border);
+            border-radius: 10px;
+            padding: 1rem 1.15rem;
             text-align: center;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .stat-card:hover {
+            border-color: var(--pt-accent);
+            box-shadow: 0 0 20px var(--pt-accent-dim);
         }
         .stat-card .value {
-            font-size: 1.8rem;
-            font-weight: 700;
+            font-family: 'DM Mono', monospace;
+            font-size: 1.6rem;
+            font-weight: 500;
+            color: var(--pt-text-bright);
+            letter-spacing: -0.02em;
         }
         .stat-card .label {
-            font-size: 0.85rem;
-            color: var(--pico-muted-color);
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--pt-text-muted);
+            margin-bottom: 0.25rem;
         }
-        .positive { color: #22c55e; }
-        .negative { color: #ef4444; }
-        .warning { color: #f59e0b; }
+
+        /* ── Semantic Colors ──────────────────────────────────────── */
+        .positive { color: var(--pt-positive); }
+        .negative { color: var(--pt-negative); }
+        .warning { color: var(--pt-warning); }
+
+        /* ── Badges ───────────────────────────────────────────────── */
         .badge {
             display: inline-block;
-            padding: 0.2em 0.6em;
-            font-size: 0.75rem;
-            border-radius: 1rem;
-            font-weight: 600;
+            padding: 0.2em 0.65em;
+            font-size: 0.7rem;
+            font-family: 'DM Mono', monospace;
+            font-weight: 500;
+            border-radius: 4px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
         }
-        .badge-buy { background: #dcfce7; color: #166534; }
-        .badge-sell { background: #fee2e2; color: #991b1b; }
-        .badge-hold { background: #f3f4f6; color: #374151; }
+        .badge-buy { background: var(--pt-buy-bg); color: var(--pt-buy-fg); }
+        .badge-sell { background: var(--pt-sell-bg); color: var(--pt-sell-fg); }
+        .badge-hold { background: var(--pt-hold-bg); color: var(--pt-hold-fg); }
+        .badge-running { background: var(--pt-running-bg); color: var(--pt-running-fg); }
+        .badge-done { background: var(--pt-done-bg); color: var(--pt-done-fg); }
+        .badge-failed { background: var(--pt-sell-bg); color: var(--pt-sell-fg); }
+        .badge-idle { background: var(--pt-hold-bg); color: var(--pt-hold-fg); }
+        .badge-type { background: var(--pt-running-bg); color: var(--pt-running-fg); }
+        .badge-growth { background: var(--pt-done-bg); color: var(--pt-done-fg); }
+        .badge-moonshot { background: rgba(188, 140, 255, 0.15); color: #bc8cff; }
+
+        /* ── Alerts ───────────────────────────────────────────────── */
         .alert {
-            padding: 1rem;
-            border-radius: var(--pico-border-radius);
+            padding: 0.85rem 1rem;
+            border-radius: 8px;
             margin-bottom: 1rem;
+            font-size: 0.9rem;
+            border-left: 3px solid;
         }
-        .alert-warning { background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; }
-        .alert-danger { background: #fee2e2; border: 1px solid #ef4444; color: #991b1b; }
-        .alert-info { background: #dbeafe; border: 1px solid #3b82f6; color: #1e40af; }
-        #equity-chart {
-            max-height: 300px;
+        .alert-warning {
+            background: var(--pt-warn-bg);
+            border-left-color: var(--pt-warning);
+            color: var(--pt-warn-fg);
         }
+        .alert-danger {
+            background: var(--pt-danger-bg);
+            border-left-color: var(--pt-negative);
+            color: var(--pt-danger-fg);
+        }
+        .alert-info {
+            background: var(--pt-info-bg);
+            border-left-color: var(--pt-info);
+            color: var(--pt-info-fg);
+        }
+
+        /* ── Tables ───────────────────────────────────────────────── */
+        table {
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+        table thead th {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--pt-text-muted);
+            font-weight: 500;
+            border-bottom: 1px solid var(--pt-border);
+        }
+        table tbody tr {
+            transition: background 0.1s;
+        }
+        table tbody tr:hover {
+            background: var(--pt-surface-hover);
+        }
+        table td {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.82rem;
+            color: var(--pt-text);
+            border-bottom: 1px solid var(--pt-border-subtle);
+        }
+        table td small {
+            color: var(--pt-text-muted);
+            font-family: 'DM Sans', sans-serif;
+        }
+
+        /* ── Articles / Panels ────────────────────────────────────── */
+        article {
+            background: var(--pt-surface);
+            border: 1px solid var(--pt-border);
+            border-radius: 10px;
+        }
+
+        /* ── Buttons ──────────────────────────────────────────────── */
+        .badge-status { margin: 0.3rem 0; }
+        .btn-sm {
+            margin-top: 0.5rem;
+            padding: 0.3rem 0.8rem;
+            font-size: 0.75rem;
+            font-family: 'DM Mono', monospace;
+            letter-spacing: 0.03em;
+        }
+        .btn-inline { margin-left: 1rem; padding: 0.3rem 0.8rem; }
+
+        /* ── Charts ───────────────────────────────────────────────── */
+        .chart-sm { max-width: 400px; margin: auto; }
+        #equity-chart { max-height: 300px; }
+
+        /* ── Schedule inputs ──────────────────────────────────────── */
+        .schedule-hour { width: 5rem; }
+        .schedule-dow { width: 8rem; }
+
+        /* ── Pagination ───────────────────────────────────────────── */
+        .pagination {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            align-items: center;
+            margin-top: 1.5rem;
+        }
+        .pagination span {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--pt-text-muted);
+        }
+
+        /* ── Journal ──────────────────────────────────────────────── */
+        .journal-content {
+            font-size: 0.9rem;
+            line-height: 1.65;
+        }
+        .journal-content h1,
+        .journal-content h2,
+        .journal-content h3 {
+            text-transform: none;
+            letter-spacing: normal;
+            color: var(--pt-text-bright);
+        }
+        .journal-content ul, .journal-content ol {
+            padding-left: 1.25rem;
+        }
+        .journal-content code {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.85em;
+            background: var(--pt-surface-hover);
+            padding: 0.15em 0.4em;
+            border-radius: 4px;
+        }
+
+        /* ── Footer ───────────────────────────────────────────────── */
+        footer {
+            border-top: 1px solid var(--pt-border-subtle);
+            padding-top: 1rem;
+            margin-top: 2rem;
+        }
+        footer small {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--pt-text-muted);
+            letter-spacing: 0.04em;
+        }
+
+        /* ── Page load animation ──────────────────────────────────── */
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        main > * {
+            animation: fadeUp 0.35s ease-out both;
+        }
+        main > *:nth-child(2) { animation-delay: 0.04s; }
+        main > *:nth-child(3) { animation-delay: 0.08s; }
+        main > *:nth-child(4) { animation-delay: 0.12s; }
+        main > *:nth-child(5) { animation-delay: 0.16s; }
+        main > *:nth-child(6) { animation-delay: 0.20s; }
     </style>
 </head>
 <body>
     <nav>
         <ul>
-            <li><strong>Paper Trader</strong></li>
+            <li><strong>paper trader</strong></li>
         </ul>
-        <button class="nav-toggle" onclick="this.nextElementSibling.classList.toggle('open')" aria-label="Menu">&#9776;</button>
+        <button class="nav-toggle" aria-label="Menu" aria-expanded="false"
+            onclick="var n=this.nextElementSibling;n.classList.toggle('open');this.setAttribute('aria-expanded',n.classList.contains('open'))">&#9776;</button>
         <ul class="nav-links">
-            <li><a href="/">Dashboard</a></li>
-            <li><a href="/decisions">Decisions</a></li>
-            <li><a href="/journal">Journal</a></li>
-            <li><a href="/api-usage">API Usage</a></li>
-            <li><a href="/dry-run">Dry Run</a></li>
-            <li><a href="/settings">Settings</a></li>
+            {% set nav_items = [("/", "Dashboard"), ("/decisions", "Decisions"), ("/journal", "Journal"), ("/api-usage", "API Usage"), ("/dry-run", "Dry Run"), ("/settings", "Settings")] %}
+            {% for href, label in nav_items %}
+            <li><a href="{{ href }}" {% if request.url.path == href %}aria-current="page"{% endif %}>{{ label }}</a></li>
+            {% endfor %}
         </ul>
     </nav>
     <main class="container">
         {% block content %}{% endblock %}
     </main>
     <footer class="container">
-        <small>Paper Trader v0.1.0 — Educational use only</small>
+        <small>paper trader v0.1.0 &mdash; educational use only</small>
     </footer>
     <script src="/static/app.js"></script>
     {% block scripts %}{% endblock %}

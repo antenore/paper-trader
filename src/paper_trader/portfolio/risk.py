@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from paper_trader.config import settings
+from paper_trader.config import get_tier_settings, settings
 from paper_trader.portfolio.tools import check_sector_cap, get_sector
 
 
@@ -14,6 +14,7 @@ def check_risk(
     cash: float,
     positions: list[dict[str, Any]],
     initial_cash: float | None = None,
+    risk_tier: str = "growth",
 ) -> dict[str, Any]:
     """
     Run all risk checks before executing a trade.
@@ -68,9 +69,10 @@ def check_risk(
         shares = available / price
         total_cost = shares * price
 
-    # 4. Position limit: no single position > max_position_pct of portfolio
+    # 4. Position limit: tier-aware (growth: 25%, moonshot: 10%)
     portfolio_total = cash + positions_value
-    max_position_value = portfolio_total * settings.max_position_pct
+    tier_cfg = get_tier_settings(risk_tier)
+    max_position_value = portfolio_total * tier_cfg["max_position_pct"]
 
     # Check existing position + new purchase
     existing = next((p for p in positions if p["symbol"] == symbol), None)
@@ -82,9 +84,29 @@ def check_risk(
         if allowed_value <= 0:
             return {
                 "ok": False,
-                "reason": f"Position limit: {symbol} already at max ({existing_value:.2f}/{max_position_value:.2f})",
+                "reason": f"Position limit ({risk_tier}): {symbol} already at max ({existing_value:.2f}/{max_position_value:.2f})",
             }
         shares = allowed_value / price
+        total_cost = shares * price
+
+    if shares < 0.01:
+        return {"ok": False, "reason": "Trade too small after risk adjustments"}
+
+    # 4b. Bucket limit: total allocation per tier (growth: 65%, moonshot: 20%)
+    tier_total = sum(
+        p["shares"] * p.get("current_price", p["avg_cost"])
+        for p in positions
+        if p.get("risk_tier", "growth") == risk_tier
+    )
+    max_bucket_value = portfolio_total * tier_cfg["max_bucket_pct"]
+    if tier_total + total_cost > max_bucket_value:
+        allowed_bucket = max_bucket_value - tier_total
+        if allowed_bucket <= 0:
+            return {
+                "ok": False,
+                "reason": f"Bucket limit ({risk_tier}): tier at {tier_total:.2f}/{max_bucket_value:.2f}",
+            }
+        shares = min(shares, allowed_bucket / price)
         total_cost = shares * price
 
     if shares < 0.01:

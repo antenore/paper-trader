@@ -78,6 +78,14 @@ async def run_trading_pipeline(
         session_spent = 0.0
         position_symbols = [p["symbol"] for p in await queries.get_open_positions(db, is_dry_run=is_dry_run)]
 
+        # Build tier map from watchlist + positions
+        watchlist = await queries.get_watchlist(db)
+        watchlist_tiers = {w["symbol"]: w.get("risk_tier", "growth") or "growth" for w in watchlist}
+        # Positions inherit their stored tier
+        for p in await queries.get_open_positions(db, is_dry_run=is_dry_run):
+            if p["symbol"] not in watchlist_tiers:
+                watchlist_tiers[p["symbol"]] = p.get("risk_tier", "growth") or "growth"
+
         for decision in analysis.decisions:
             if decision.action == "HOLD":
                 continue
@@ -99,7 +107,7 @@ async def run_trading_pipeline(
                     result["trades"].append({"symbol": decision.symbol, "action": "BUY", "skipped": "Session budget exhausted"})
                     continue
 
-            trade_result = await _execute_decision(db, market, decision, is_dry_run)
+            trade_result = await _execute_decision(db, market, decision, is_dry_run, watchlist_tiers)
             result["trades"].append(trade_result)
 
             # Track session spend for BUYs
@@ -153,12 +161,16 @@ async def _execute_decision(
     market: MarketDataProvider,
     decision: StockDecision,
     is_dry_run: bool,
+    watchlist_tiers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Execute a single trading decision."""
     prices = await market.get_current_prices([decision.symbol])
     price = prices.get(decision.symbol)
     if price is None:
         return {"symbol": decision.symbol, "error": "Price unavailable"}
+
+    # Resolve risk tier: prefer decision's tier, fall back to watchlist, default to growth
+    risk_tier = decision.risk_tier or (watchlist_tiers or {}).get(decision.symbol, "growth")
 
     # Get the latest decision ID
     decisions = await queries.get_decisions(db, is_dry_run=is_dry_run, limit=1)
@@ -184,7 +196,7 @@ async def _execute_decision(
         if shares < 0.01:
             return {"symbol": decision.symbol, "action": "BUY", "skipped": "Already at target"}
 
-        result = await execute_buy(db, decision.symbol, shares, price, decision_id, is_dry_run)
+        result = await execute_buy(db, decision.symbol, shares, price, decision_id, is_dry_run, risk_tier=risk_tier)
         return {"symbol": decision.symbol, **result}
 
     elif decision.action == "SELL":

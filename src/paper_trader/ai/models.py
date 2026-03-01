@@ -13,6 +13,11 @@ class StockDecision(BaseModel):
         ge=0.0, le=30.0, default=0.0,
         description="Target portfolio allocation percentage (0-30%)",
     )
+    risk_tier: str = Field(
+        default="growth",
+        pattern="^(growth|moonshot)$",
+        description="Risk tier: 'growth' for stable large-caps, 'moonshot' for speculative plays",
+    )
 
 
 class ScreeningResult(BaseModel):
@@ -26,6 +31,11 @@ class WatchlistUpdate(BaseModel):
     symbol: str
     action: str = Field(pattern="^(ADD|REMOVE|KEEP)$")
     reason: str
+    risk_tier: str = Field(
+        default="growth",
+        pattern="^(growth|moonshot)$",
+        description="Risk tier: 'growth' for blue chips, 'moonshot' for speculative plays",
+    )
 
 
 # Fix forward reference

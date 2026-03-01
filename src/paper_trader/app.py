@@ -80,6 +80,10 @@ def create_app() -> FastAPI:
     async def health():
         return {"status": "ok"}
 
+    # CSRF protection
+    from paper_trader.dashboard.csrf import CSRFMiddleware
+    app.add_middleware(CSRFMiddleware)
+
     # Mount dashboard routes
     try:
         from paper_trader.dashboard.routes import router as dashboard_router

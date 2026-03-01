@@ -7,13 +7,27 @@
 {% for entry in journal %}
 <article>
     <header>
-        <span class="badge" style="background:#dbeafe;color:#1e40af">{{ entry.entry_type }}</span>
+        <span class="badge badge-type">{{ entry.entry_type }}</span>
         <small>{{ entry.created_at[:16] }} — {{ entry.model.split("-")[1] if "-" in entry.model else entry.model }}</small>
     </header>
-    <p>{{ entry.content }}</p>
+    <div class="journal-content">{{ entry.content }}</div>
 </article>
 {% endfor %}
 {% else %}
 <p>No journal entries yet. The AI will start adding observations and patterns as it trades.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if journal %}
+<script defer src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    if (typeof marked === 'undefined') return;
+    document.querySelectorAll('.journal-content').forEach(el => {
+        el.innerHTML = marked.parse(el.textContent);
+    });
+});
+</script>
 {% endif %}
 {% endblock %}

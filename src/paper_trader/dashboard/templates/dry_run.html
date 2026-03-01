@@ -7,7 +7,8 @@
     <h3>Start New Dry Run</h3>
     <p>Simulate ~30 days of trading with historical data and real AI decisions.</p>
     <p><strong>Default symbols:</strong> {{ default_symbols|join(', ') }}</p>
-    <form method="post" action="/start-dry-run">
+    <form method="post" action="/start-dry-run" onsubmit="return confirm('Start a dry run? This will consume API budget.')">
+        {{ csrf_hidden }}
         <button type="submit">Start Dry Run</button>
     </form>
 </article>
@@ -50,7 +51,8 @@
 <article>
     <h3>Go Live</h3>
     <p>Reset the portfolio and switch to live mode. Journal entries will be preserved.</p>
-    <form method="post" action="/go-live">
+    <form method="post" action="/go-live" onsubmit="return confirm('Reset the portfolio and switch to live mode? This cannot be undone.')">
+        {{ csrf_hidden }}
         <button type="submit" class="secondary">Reset &amp; Go Live</button>
     </form>
 </article>

@@ -83,10 +83,11 @@ async def open_position(
     avg_cost: float,
     is_dry_run: bool = False,
     stop_loss_price: float | None = None,
+    risk_tier: str = "growth",
 ) -> int:
     cursor = await db.execute(
-        "INSERT INTO positions (symbol, shares, avg_cost, is_dry_run, stop_loss_price) VALUES (?, ?, ?, ?, ?)",
-        (symbol, shares, avg_cost, int(is_dry_run), stop_loss_price),
+        "INSERT INTO positions (symbol, shares, avg_cost, is_dry_run, stop_loss_price, risk_tier) VALUES (?, ?, ?, ?, ?, ?)",
+        (symbol, shares, avg_cost, int(is_dry_run), stop_loss_price, risk_tier),
     )
     await db.commit()
     return cursor.lastrowid  # type: ignore[return-value]
@@ -174,13 +175,24 @@ async def record_decision(
 
 
 async def get_decisions(
-    db: aiosqlite.Connection, is_dry_run: bool = False, limit: int = 50
+    db: aiosqlite.Connection, is_dry_run: bool = False, limit: int = 50,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     rows = await db.execute_fetchall(
-        "SELECT * FROM decisions WHERE is_dry_run = ? ORDER BY created_at DESC LIMIT ?",
-        (int(is_dry_run), limit),
+        "SELECT * FROM decisions WHERE is_dry_run = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (int(is_dry_run), limit, offset),
     )
     return [dict(r) for r in rows]
+
+
+async def count_decisions(
+    db: aiosqlite.Connection, is_dry_run: bool = False,
+) -> int:
+    row = await db.execute_fetchall(
+        "SELECT COUNT(*) FROM decisions WHERE is_dry_run = ?",
+        (int(is_dry_run),),
+    )
+    return row[0][0] if row else 0
 
 
 # ── API Calls ─────────────────────────────────────────────────────────
@@ -413,11 +425,13 @@ async def get_watchlist(db: aiosqlite.Connection) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-async def add_to_watchlist(db: aiosqlite.Connection, symbol: str, reason: str | None = None) -> None:
+async def add_to_watchlist(
+    db: aiosqlite.Connection, symbol: str, reason: str | None = None, risk_tier: str = "growth",
+) -> None:
     await db.execute(
-        """INSERT INTO watchlist (symbol, reason) VALUES (?, ?)
-           ON CONFLICT(symbol) DO UPDATE SET reason = ?, removed_at = NULL, added_at = datetime('now')""",
-        (symbol, reason, reason),
+        """INSERT INTO watchlist (symbol, reason, risk_tier) VALUES (?, ?, ?)
+           ON CONFLICT(symbol) DO UPDATE SET reason = ?, risk_tier = ?, removed_at = NULL, added_at = datetime('now')""",
+        (symbol, reason, risk_tier, reason, risk_tier),
     )
     await db.commit()
 

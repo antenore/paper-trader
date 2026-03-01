@@ -1,23 +1,18 @@
 // Paper Trader — Client-side JS
-// HTMX auto-refresh for dashboard partials
+'use strict';
+
+(function () {
+
+let _pollTimer = null;
+let _toastCount = 0;
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Auto-refresh portfolio every 60 seconds on the main dashboard
-    const portfolioEl = document.querySelector('[hx-get="/partials/portfolio"]');
-    if (portfolioEl) {
-        portfolioEl.setAttribute('hx-trigger', 'every 60s');
-        htmx.process(portfolioEl);
-    }
-
-    // Load scheduler status on dashboard
     if (document.getElementById('scheduler-status')) {
         loadJobStatus();
     }
 });
 
 // ── Scheduler job status ─────────────────────────────────────────────
-
-let _pollTimer = null;
 
 async function loadJobStatus() {
     const container = document.getElementById('scheduler-status');
@@ -28,7 +23,6 @@ async function loadJobStatus() {
         const jobs = await res.json();
         renderJobCards(container, jobs);
 
-        // Poll while any job is running
         const anyRunning = jobs.some(j => j.is_running);
         if (anyRunning && !_pollTimer) {
             _pollTimer = setInterval(() => loadJobStatus(), 3000);
@@ -37,48 +31,68 @@ async function loadJobStatus() {
             _pollTimer = null;
         }
     } catch (e) {
-        container.innerHTML = '<p>Failed to load job statuses.</p>';
+        container.textContent = '';
+        const p = document.createElement('p');
+        p.textContent = 'Failed to load job statuses.';
+        container.appendChild(p);
     }
 }
 
+const STATUS_CLASSES = {
+    running: 'badge-running',
+    completed: 'badge-done',
+    failed: 'badge-failed',
+};
+const STATUS_LABELS = {
+    running: 'Running',
+    completed: 'Done',
+    failed: 'Failed',
+};
+
 function renderJobCards(container, jobs) {
-    container.innerHTML = jobs.map(job => {
-        let statusBadge = '';
-        if (job.is_running) {
-            statusBadge = '<span class="badge" style="background:#dbeafe;color:#1e40af">Running</span>';
-        } else if (job.last_status === 'completed') {
-            statusBadge = '<span class="badge" style="background:#dcfce7;color:#166534">Done</span>';
-        } else if (job.last_status === 'failed') {
-            statusBadge = '<span class="badge" style="background:#fee2e2;color:#991b1b">Failed</span>';
-        } else {
-            statusBadge = '<span class="badge" style="background:#f3f4f6;color:#374151">Idle</span>';
-        }
+    container.textContent = '';
+    jobs.forEach(job => {
+        const card = document.createElement('div');
+        card.className = 'stat-card';
 
-        const lastRun = job.last_started
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.textContent = job.name;
+        card.appendChild(label);
+
+        const badgeWrap = document.createElement('div');
+        badgeWrap.className = 'badge-status';
+        const badge = document.createElement('span');
+        const statusKey = job.is_running ? 'running' : (job.last_status || '');
+        badge.className = 'badge ' + (STATUS_CLASSES[statusKey] || 'badge-idle');
+        badge.textContent = job.is_running ? 'Running' : (STATUS_LABELS[statusKey] || 'Idle');
+        badgeWrap.appendChild(badge);
+        card.appendChild(badgeWrap);
+
+        const lastRun = document.createElement('div');
+        lastRun.className = 'label';
+        lastRun.textContent = 'Last: ' + (job.last_started
             ? new Date(job.last_started).toLocaleTimeString()
-            : 'Never';
+            : 'Never');
+        card.appendChild(lastRun);
 
-        const disabled = job.is_running ? 'disabled' : '';
+        const btn = document.createElement('button');
+        btn.className = 'outline btn-sm';
+        btn.textContent = job.is_running ? 'Running...' : 'Run Now';
+        btn.disabled = job.is_running;
+        btn.addEventListener('click', () => triggerJob(job.job_id));
+        card.appendChild(btn);
 
-        return `
-            <div class="stat-card">
-                <div class="label">${job.name}</div>
-                <div style="margin:0.3rem 0">${statusBadge}</div>
-                <div class="label">Last: ${lastRun}</div>
-                <button onclick="triggerJob('${job.job_id}')" ${disabled}
-                    style="margin-top:0.5rem;padding:0.3rem 0.8rem;font-size:0.8rem"
-                    class="outline">${job.is_running ? 'Running...' : 'Run Now'}</button>
-            </div>`;
-    }).join('');
+        container.appendChild(card);
+    });
 }
 
 async function triggerJob(jobId) {
     try {
-        const res = await fetch(`/trigger/${jobId}`, { method: 'POST' });
+        const res = await fetch('/trigger/' + encodeURIComponent(jobId), { method: 'POST' });
         const data = await res.json();
         if (data.success) {
-            showToast(`Started: ${jobId}`);
-            // Start polling
+            showToast('Started: ' + jobId);
             if (!_pollTimer) {
                 _pollTimer = setInterval(() => loadJobStatus(), 3000);
             }
@@ -94,12 +108,30 @@ async function triggerJob(jobId) {
 function showToast(message, isError) {
     const toast = document.createElement('div');
     toast.textContent = message;
-    toast.style.cssText = `
-        position:fixed; bottom:1.5rem; right:1.5rem; padding:0.75rem 1.25rem;
-        border-radius:0.5rem; z-index:9999; font-size:0.9rem; font-weight:500;
-        color:#fff; background:${isError ? '#ef4444' : '#22c55e'};
-        box-shadow:0 4px 12px rgba(0,0,0,0.15);
-    `;
+    const offset = 1.5 + (_toastCount * 3.5);
+    var bg = isError ? 'rgba(248,81,73,0.9)' : 'rgba(63,185,80,0.9)';
+    toast.style.cssText =
+        'position:fixed; bottom:' + offset + 'rem; right:1.5rem; padding:0.6rem 1.1rem;' +
+        'border-radius:6px; z-index:9999; font-size:0.8rem; font-weight:500;' +
+        'font-family:DM Mono,monospace; letter-spacing:0.02em;' +
+        'color:#fff; background:' + bg + ';' +
+        'backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);' +
+        'box-shadow:0 8px 24px rgba(0,0,0,0.4); transition:opacity 0.3s, transform 0.3s;' +
+        'transform:translateY(0);';
     document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3000);
+    _toastCount++;
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(6px)';
+        setTimeout(() => {
+            toast.remove();
+            _toastCount--;
+        }, 300);
+    }, 3000);
 }
+
+// Expose triggerJob for inline onclick (scheduler cards use addEventListener now,
+// but keep as safety net)
+window.triggerJob = triggerJob;
+
+})();

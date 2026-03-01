@@ -11,14 +11,18 @@
 <div class="table-responsive">
 <table>
     <thead>
-        <tr><th>Symbol</th><th>Shares</th><th>Avg Cost</th></tr>
+        <tr><th>Symbol</th><th>Sector</th><th>Shares</th><th>Avg Cost</th><th>Current</th><th>P&L%</th><th>Stop-Loss</th></tr>
     </thead>
     <tbody>
     {% for p in positions %}
         <tr>
-            <td>{{ p.symbol }}</td>
+            <td><strong>{{ p.symbol }}</strong></td>
+            <td><small>{{ p.sector }}</small></td>
             <td>{{ "%.2f"|format(p.shares) }}</td>
             <td>${{ "%.2f"|format(p.avg_cost) }}</td>
+            <td>${{ "%.2f"|format(p.current_price) }}</td>
+            <td class="{% if p.pnl_pct >= 0 %}positive{% else %}negative{% endif %}">{{ "%+.1f"|format(p.pnl_pct) }}%</td>
+            <td>{% if p.stop_loss_price %}${{ "%.2f"|format(p.stop_loss_price) }} <small>({{ "%.1f"|format(p.stop_distance_pct) }}%)</small>{% else %}&mdash;{% endif %}</td>
         </tr>
     {% endfor %}
     </tbody>

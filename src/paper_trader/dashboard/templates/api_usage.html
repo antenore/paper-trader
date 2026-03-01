@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}API Usage — Paper Trader{% endblock %}
+{% block head_scripts %}
+<script defer src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+{% endblock %}
 {% block content %}
 <h2>API Usage</h2>
 
@@ -47,7 +50,7 @@
 {% if daily %}
 <article>
     <h3>Daily Spend</h3>
-    <canvas id="daily-chart" style="max-height:300px"></canvas>
+    <canvas id="daily-chart" style="max-height:300px" role="img" aria-label="Daily API spend bar chart">Your browser does not support canvas.</canvas>
 </article>
 {% endif %}
 {% endblock %}
@@ -55,21 +58,48 @@
 {% block scripts %}
 {% if daily %}
 <script>
-new Chart(document.getElementById('daily-chart').getContext('2d'), {
-    type: 'bar',
-    data: {
-        labels: {{ daily|map(attribute='day')|list|tojson }},
-        datasets: [{
-            label: 'Daily Cost ($)',
-            data: {{ daily|map(attribute='total_cost')|list|tojson }},
-            backgroundColor: 'rgba(59, 130, 246, 0.6)',
-        }]
-    },
-    options: {
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true } }
-    }
+document.addEventListener('DOMContentLoaded', () => {
+    new Chart(document.getElementById('daily-chart').getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: {{ daily|map(attribute='day')|list|tojson }},
+            datasets: [{
+                label: 'Daily Cost ($)',
+                data: {{ daily|map(attribute='total_cost')|list|tojson }},
+                backgroundColor: 'rgba(226, 169, 59, 0.5)',
+                hoverBackgroundColor: 'rgba(226, 169, 59, 0.8)',
+                borderRadius: 4,
+                borderSkipped: false,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: '#1a1f2e',
+                    borderColor: '#2a3040',
+                    borderWidth: 1,
+                    titleFont: { family: 'DM Mono', size: 12 },
+                    bodyFont: { family: 'DM Mono', size: 12 },
+                    titleColor: '#c9d1d9',
+                    bodyColor: '#e2a93b',
+                    cornerRadius: 6,
+                },
+            },
+            scales: {
+                x: {
+                    grid: { color: 'rgba(42, 48, 64, 0.5)' },
+                    ticks: { color: '#6b7688', font: { family: 'DM Mono', size: 10 }, maxTicksLimit: 10 },
+                },
+                y: {
+                    beginAtZero: true,
+                    grid: { color: 'rgba(42, 48, 64, 0.5)' },
+                    ticks: { color: '#6b7688', font: { family: 'DM Mono', size: 10 } },
+                },
+            }
+        }
+    });
 });
 </script>
 {% endif %}

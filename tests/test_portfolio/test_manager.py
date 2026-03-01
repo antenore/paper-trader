@@ -23,12 +23,13 @@ async def test_buy_basic(db_with_portfolio):
 
 @pytest.mark.asyncio
 async def test_buy_adds_to_existing_position(db_with_portfolio):
-    await execute_buy(db_with_portfolio, "AAPL", 1.0, 100.0)
-    await execute_buy(db_with_portfolio, "AAPL", 1.0, 120.0)
+    # Use small amounts to stay within growth tier's 25% position cap ($200 of $800)
+    await execute_buy(db_with_portfolio, "AAPL", 1.0, 50.0)
+    await execute_buy(db_with_portfolio, "AAPL", 1.0, 60.0)
 
     pos = await queries.get_position_by_symbol(db_with_portfolio, "AAPL")
     assert pos["shares"] == 2.0
-    assert pos["avg_cost"] == 110.0  # (100+120)/2
+    assert pos["avg_cost"] == 55.0  # (50+60)/2
 
 
 @pytest.mark.asyncio

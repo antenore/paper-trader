@@ -15,6 +15,7 @@
 <article>
     <h3>API Budget</h3>
     <form method="post" action="/settings/config">
+        {{ csrf_hidden }}
         <div class="grid">
             <label>
                 Warning threshold (USD)
@@ -35,6 +36,7 @@
 <article>
     <h3>Risk Parameters</h3>
     <form method="post" action="/settings/config">
+        {{ csrf_hidden }}
         <div class="grid">
             <label>
                 Safety stop (%)
@@ -92,10 +94,57 @@
     </form>
 </article>
 
+<!-- Risk Tiers -->
+<article>
+    <h3>Risk Tiers</h3>
+    <form method="post" action="/settings/config">
+        {{ csrf_hidden }}
+        <p><small>Growth = established large-caps (AAPL, NVDA...) &bull; Moonshot = speculative plays (small caps, breakouts)</small></p>
+        <div class="grid">
+            <label>
+                <span class="badge badge-growth">Growth</span> Max position (%)
+                <input type="number" name="config.growth_max_position_pct" value="{{ config['config.growth_max_position_pct'] }}" step="0.01" min="0" max="1">
+                <small>Max fraction per growth position (0.25 = 25%)</small>
+            </label>
+            <label>
+                <span class="badge badge-moonshot">Moonshot</span> Max position (%)
+                <input type="number" name="config.moonshot_max_position_pct" value="{{ config['config.moonshot_max_position_pct'] }}" step="0.01" min="0" max="1">
+                <small>Max fraction per moonshot position (0.10 = 10%)</small>
+            </label>
+        </div>
+        <div class="grid">
+            <label>
+                <span class="badge badge-growth">Growth</span> Stop-loss (%)
+                <input type="number" name="config.growth_stop_loss_pct" value="{{ config['config.growth_stop_loss_pct'] }}" step="0.01" min="0" max="1">
+                <small>Auto-sell threshold for growth positions (0.07 = 7%)</small>
+            </label>
+            <label>
+                <span class="badge badge-moonshot">Moonshot</span> Stop-loss (%)
+                <input type="number" name="config.moonshot_stop_loss_pct" value="{{ config['config.moonshot_stop_loss_pct'] }}" step="0.01" min="0" max="1">
+                <small>Auto-sell threshold for moonshots (0.15 = 15%)</small>
+            </label>
+        </div>
+        <div class="grid">
+            <label>
+                <span class="badge badge-growth">Growth</span> Max bucket (%)
+                <input type="number" name="config.growth_max_bucket_pct" value="{{ config['config.growth_max_bucket_pct'] }}" step="0.05" min="0" max="1">
+                <small>Max total portfolio fraction in growth tier (0.65 = 65%)</small>
+            </label>
+            <label>
+                <span class="badge badge-moonshot">Moonshot</span> Max bucket (%)
+                <input type="number" name="config.moonshot_max_bucket_pct" value="{{ config['config.moonshot_max_bucket_pct'] }}" step="0.05" min="0" max="1">
+                <small>Max total portfolio fraction in moonshot tier (0.20 = 20%)</small>
+            </label>
+        </div>
+        <button type="submit">Save Tiers</button>
+    </form>
+</article>
+
 <!-- Schedule -->
 <article>
     <h3>Schedule</h3>
     <form method="post" action="/settings/schedule">
+        {{ csrf_hidden }}
         <div class="table-responsive">
         <table>
             <thead>
@@ -105,11 +154,11 @@
             {% for s in schedule %}
                 <tr>
                     <td><strong>{{ s.name }}</strong></td>
-                    <td><input type="number" name="{{ s.job_id }}.hour" value="{{ s.hour }}" min="0" max="23" style="width:5rem"></td>
-                    <td><input type="number" name="{{ s.job_id }}.minute" value="{{ s.minute }}" min="0" max="59" style="width:5rem"></td>
-                    <td><input type="text" name="{{ s.job_id }}.day_of_week" value="{{ s.day_of_week|default('mon-fri', true) }}" style="width:8rem">
+                    <td><input type="number" name="{{ s.job_id }}.hour" value="{{ s.hour }}" min="0" max="23" class="schedule-hour" aria-label="{{ s.name }} hour"></td>
+                    <td><input type="number" name="{{ s.job_id }}.minute" value="{{ s.minute }}" min="0" max="59" class="schedule-hour" aria-label="{{ s.name }} minute"></td>
+                    <td><input type="text" name="{{ s.job_id }}.day_of_week" value="{{ s.day_of_week|default('mon-fri', true) }}" class="schedule-dow" aria-label="{{ s.name }} day of week">
                         {% if s.day is defined %}
-                        <input type="text" name="{{ s.job_id }}.day" value="{{ s.day }}" style="width:5rem" placeholder="day">
+                        <input type="text" name="{{ s.job_id }}.day" value="{{ s.day }}" class="schedule-hour" placeholder="day" aria-label="{{ s.name }} day of month">
                         {% endif %}
                     </td>
                 </tr>
@@ -125,6 +174,7 @@
 <article>
     <h3>Other</h3>
     <form method="post" action="/settings/config">
+        {{ csrf_hidden }}
         <div class="grid">
             <label>
                 Timezone

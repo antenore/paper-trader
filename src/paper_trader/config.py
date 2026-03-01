@@ -76,8 +76,38 @@ class Settings(BaseSettings):
     # Correlation warning threshold (0-1)
     correlation_warn_threshold: float = 0.75
 
+    # ── Risk tiers (growth vs moonshot) ──────────────────────────────
+    # Growth: established companies with clear momentum (AAPL, NVDA, etc.)
+    growth_max_position_pct: float = 0.25   # max 25% per growth position
+    growth_stop_loss_pct: float = 0.07      # 7% stop-loss
+    growth_max_bucket_pct: float = 0.65     # max 65% total in growth tier
+
+    # Moonshot: higher-risk plays, small caps, speculative bets
+    moonshot_max_position_pct: float = 0.10  # max 10% per moonshot position
+    moonshot_stop_loss_pct: float = 0.15     # 15% stop-loss (more volatile, needs room)
+    moonshot_max_bucket_pct: float = 0.20    # max 20% total in moonshot tier
+
 
 settings = Settings()
+
+# Valid risk tiers
+RISK_TIERS = ("growth", "moonshot")
+
+
+def get_tier_settings(tier: str) -> dict[str, float]:
+    """Return risk parameters for a given tier."""
+    if tier == "moonshot":
+        return {
+            "max_position_pct": settings.moonshot_max_position_pct,
+            "stop_loss_pct": settings.moonshot_stop_loss_pct,
+            "max_bucket_pct": settings.moonshot_max_bucket_pct,
+        }
+    # Default to growth for unknown tiers
+    return {
+        "max_position_pct": settings.growth_max_position_pct,
+        "stop_loss_pct": settings.growth_stop_loss_pct,
+        "max_bucket_pct": settings.growth_max_bucket_pct,
+    }
 
 
 # ── Dynamic config persistence ────────────────────────────────────────
@@ -105,6 +135,12 @@ CONFIG_KEYS: dict[str, tuple[str, type]] = {
     "config.sector_cap_pct": ("sector_cap_pct", float),
     "config.max_session_deploy_pct": ("max_session_deploy_pct", float),
     "config.correlation_warn_threshold": ("correlation_warn_threshold", float),
+    "config.growth_max_position_pct": ("growth_max_position_pct", float),
+    "config.growth_stop_loss_pct": ("growth_stop_loss_pct", float),
+    "config.growth_max_bucket_pct": ("growth_max_bucket_pct", float),
+    "config.moonshot_max_position_pct": ("moonshot_max_position_pct", float),
+    "config.moonshot_stop_loss_pct": ("moonshot_stop_loss_pct", float),
+    "config.moonshot_max_bucket_pct": ("moonshot_max_bucket_pct", float),
 }
 
 

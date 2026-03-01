@@ -5,7 +5,7 @@ from typing import Any
 
 import aiosqlite
 
-from paper_trader.config import settings
+from paper_trader.config import get_tier_settings, settings
 from paper_trader.db import queries
 from paper_trader.portfolio.risk import check_risk
 
@@ -49,6 +49,7 @@ async def execute_buy(
     price: float,
     decision_id: int | None = None,
     is_dry_run: bool = False,
+    risk_tier: str = "growth",
 ) -> dict[str, Any]:
     """Execute a buy order. Returns trade details or error."""
     portfolio = await queries.get_portfolio(db, is_dry_run=is_dry_run)
@@ -57,18 +58,22 @@ async def execute_buy(
 
     total_cost = shares * price
 
-    # Check risk limits
+    # Enrich positions with current prices for risk checks
+    positions = await queries.get_open_positions(db, is_dry_run=is_dry_run)
+
+    # Check risk limits (tier-aware)
     risk = check_risk(
         action="BUY",
         symbol=symbol,
         shares=shares,
         price=price,
         cash=portfolio["cash"],
-        positions=await queries.get_open_positions(db, is_dry_run=is_dry_run),
+        positions=positions,
         initial_cash=settings.initial_cash_chf,
+        risk_tier=risk_tier,
     )
     if not risk["ok"]:
-        logger.warning("Risk check failed for BUY %s: %s", symbol, risk["reason"])
+        logger.warning("Risk check failed for BUY %s (%s): %s", symbol, risk_tier, risk.get("reason"))
         return risk
 
     # Use the potentially adjusted shares from risk check
@@ -79,23 +84,24 @@ async def execute_buy(
     new_cash = portfolio["cash"] - total_cost
     await queries.update_cash(db, new_cash, is_dry_run=is_dry_run)
 
-    # Update or create position (RULE 005: set stop-loss at entry)
+    # Update or create position (RULE 005: tier-aware stop-loss at entry)
+    tier_cfg = get_tier_settings(risk_tier)
     existing = await queries.get_position_by_symbol(db, symbol, is_dry_run=is_dry_run)
     if existing:
         new_shares = existing["shares"] + shares
         new_avg_cost = (existing["shares"] * existing["avg_cost"] + total_cost) / new_shares
-        stop_loss = new_avg_cost * (1 - settings.stop_loss_pct)
+        stop_loss = new_avg_cost * (1 - tier_cfg["stop_loss_pct"])
         await queries.update_position_shares(db, existing["id"], new_shares, new_avg_cost, stop_loss_price=stop_loss)
     else:
-        stop_loss = price * (1 - settings.stop_loss_pct)
-        await queries.open_position(db, symbol, shares, price, is_dry_run=is_dry_run, stop_loss_price=stop_loss)
+        stop_loss = price * (1 - tier_cfg["stop_loss_pct"])
+        await queries.open_position(db, symbol, shares, price, is_dry_run=is_dry_run, stop_loss_price=stop_loss, risk_tier=risk_tier)
 
     # Record trade
     trade_id = await queries.record_trade(
         db, symbol, "BUY", shares, price, decision_id, is_dry_run=is_dry_run
     )
 
-    logger.info("BUY %s x%.2f @ %.2f = %.2f", symbol, shares, price, total_cost)
+    logger.info("BUY %s [%s] x%.2f @ %.2f = %.2f", symbol, risk_tier, shares, price, total_cost)
     return {"ok": True, "trade_id": trade_id, "shares": shares, "price": price, "total": total_cost}
 
 

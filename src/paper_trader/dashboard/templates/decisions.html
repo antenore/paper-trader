@@ -30,6 +30,19 @@
     </tbody>
 </table>
 </div>
+
+{% if total_pages > 1 %}
+<div class="pagination">
+    {% if page > 1 %}
+    <a href="/decisions?page={{ page - 1 }}" role="button" class="outline">&larr; Newer</a>
+    {% endif %}
+    <span>Page {{ page }} / {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a href="/decisions?page={{ page + 1 }}" role="button" class="outline">Older &rarr;</a>
+    {% endif %}
+</div>
+{% endif %}
+
 {% else %}
 <p>No decisions recorded yet.</p>
 {% endif %}
