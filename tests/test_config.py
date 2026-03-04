@@ -11,7 +11,7 @@ def test_default_settings():
     assert s.initial_cash_chf == 800.0
     assert s.currency == "CHF"
     assert s.port == 8420
-    assert s.budget_hard_stop_usd == 50.0
+    assert s.budget_hard_stop_usd == 95.0
     assert s.safety_stop_pct == 0.50
     assert s.max_position_pct == 0.40
     assert s.min_cash_reserve == 50.0

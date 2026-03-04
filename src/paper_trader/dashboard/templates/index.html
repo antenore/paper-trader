@@ -16,11 +16,29 @@
 </div>
 {% endif %}
 
-{% if monthly_spend >= budget_warn and not api_paused %}
+{% if total_spend >= budget_warn and not api_paused %}
 <div class="alert alert-warning">
-    <strong>Budget Warning</strong> — Monthly spend: ${{ "%.2f"|format(monthly_spend) }} / ${{ "%.2f"|format(budget_limit) }}
+    <strong>Budget Warning</strong> — Spent: ${{ "%.2f"|format(total_spend) }} of ${{ "%.2f"|format(account_balance) }} loaded (${{ "%.2f"|format([account_balance - total_spend, 0]|max) }} remaining)
 </div>
 {% endif %}
+
+<div class="market-ticker">
+    <div class="market-ticker__clocks">
+        <div class="market-ticker__clock">
+            <span class="market-ticker__tz">Local</span>
+            <span class="market-ticker__time" id="clock-local">--:--:--</span>
+        </div>
+        <div class="market-ticker__sep"></div>
+        <div class="market-ticker__clock">
+            <span class="market-ticker__tz">NYSE</span>
+            <span class="market-ticker__time" id="clock-nyse">--:--:--</span>
+        </div>
+    </div>
+    <div class="market-ticker__status">
+        <span class="market-dot" id="market-dot"></span>
+        <span id="market-label">CLOSED</span>
+    </div>
+</div>
 
 <div class="stat-grid">
     <div class="stat-card">
@@ -32,9 +50,18 @@
         <div class="label">Cash</div>
         <div class="value">{{ "%.2f"|format(portfolio.cash) }}</div>
     </div>
-    <div class="stat-card">
-        <div class="label">Total Value</div>
-        <div class="value">{{ "%.2f"|format(total_value) }} CHF</div>
+    <div class="stat-card stat-card--hero">
+        <div class="label">Total Fortune</div>
+        {% if total_value_chf is not none %}
+        <div class="value">{{ "%.2f"|format(total_value_chf) }} <small style="font-size:0.55em;color:var(--pt-text-muted)">CHF</small></div>
+        {% set pnl = total_value_chf - initial_cash %}
+        <div class="fortune-pnl {% if pnl >= 0 %}positive{% else %}negative{% endif %}">{{ "%+.2f"|format(pnl) }} ({{ "%+.1f"|format(pnl / initial_cash * 100) }}%)</div>
+        {% if usd_chf_rate %}<div style="font-size:0.65em;color:var(--pt-text-muted);margin-top:2px">USD/CHF: {{ "%.4f"|format(usd_chf_rate) }} · raw: {{ "%.2f"|format(total_value) }}</div>{% endif %}
+        {% else %}
+        <div class="value">{{ "%.2f"|format(total_value) }} <small style="font-size:0.55em;color:var(--pt-text-muted)">CHF</small></div>
+        {% set pnl = total_value - initial_cash %}
+        <div class="fortune-pnl {% if pnl >= 0 %}positive{% else %}negative{% endif %}">{{ "%+.2f"|format(pnl) }} ({{ "%+.1f"|format(pnl / initial_cash * 100) }}%)</div>
+        {% endif %}
     </div>
     {% endif %}
     <div class="stat-card">
@@ -42,15 +69,23 @@
         <div class="value">{{ positions|length }}</div>
     </div>
     <div class="stat-card">
-        <div class="label">API Spend (month)</div>
-        <div class="value {% if monthly_spend >= budget_warn %}warning{% endif %}">${{ "%.2f"|format(monthly_spend) }}</div>
+        <div class="label">API Remaining</div>
+        <div class="value {% if total_spend >= budget_warn %}warning{% endif %}">${{ "%.2f"|format([account_balance - total_spend, 0]|max) }}</div>
     </div>
 </div>
 
 {% if equity_values %}
 <article>
-    <h3>Equity Curve</h3>
+    <div class="chart-header">
+        <h3>Equity Curve</h3>
+        <div class="scale-tabs" role="tablist" aria-label="Time range">
+            {% for r in ["1d", "5d", "1m", "3m", "all"] %}
+            <a href="/?range={{ r }}" class="scale-tab{% if active_range == r %} active{% endif %}" role="tab" {% if active_range == r %}aria-selected="true"{% endif %}>{{ r|upper }}</a>
+            {% endfor %}
+        </div>
+    </div>
     <canvas id="equity-chart" role="img" aria-label="Equity curve chart showing portfolio value over time">Your browser does not support canvas.</canvas>
+    <div class="chart-legend" id="equity-legend"></div>
 </article>
 {% endif %}
 
@@ -68,7 +103,7 @@
         <div class="table-responsive">
         <table>
             <thead>
-                <tr><th>Symbol</th><th>Tier</th><th>Sector</th><th>Shares</th><th>Avg Cost</th><th>Current</th><th>P&L%</th><th>Stop-Loss</th><th>Opened</th></tr>
+                <tr><th>Symbol</th><th>Tier</th><th>Sector</th><th>Shares</th><th>Avg Cost</th><th>Current</th><th>Ccy</th><th>P&L%</th><th>Stop-Loss</th><th>Opened</th></tr>
             </thead>
             <tbody>
             {% for p in positions %}
@@ -77,8 +112,9 @@
                     <td><span class="badge badge-{{ p.risk_tier|default('growth') }}">{{ p.risk_tier|default('growth') }}</span></td>
                     <td><small>{{ p.sector }}</small></td>
                     <td>{{ "%.2f"|format(p.shares) }}</td>
-                    <td>${{ "%.2f"|format(p.avg_cost) }}</td>
-                    <td>${{ "%.2f"|format(p.current_price) }}</td>
+                    <td>{% if p.currency == 'CHF' %}CHF{% else %}${% endif %}{{ "%.2f"|format(p.avg_cost) }}</td>
+                    <td>{% if p.currency == 'CHF' %}CHF{% else %}${% endif %}{{ "%.2f"|format(p.current_price) }}</td>
+                    <td><small>{{ p.currency|default('USD') }}</small></td>
                     <td class="{% if p.pnl_pct >= 0 %}positive{% else %}negative{% endif %}">{{ "%+.1f"|format(p.pnl_pct) }}%</td>
                     <td>{% if p.stop_loss_price %}${{ "%.2f"|format(p.stop_loss_price) }} <small>({{ "%.1f"|format(p.stop_distance_pct) }}%)</small>{% else %}&mdash;{% endif %}</td>
                     <td>{{ p.opened_at[:10] }}</td>
@@ -126,16 +162,104 @@
     </div>
 </article>
 {% endif %}
+
+<article>
+    <h3>Watchlist</h3>
+    <form method="post" action="/watchlist/add" style="display:flex;gap:0.5rem;align-items:flex-end;margin-bottom:1rem">
+        {{ csrf_hidden }}
+        <input type="text" name="symbol" placeholder="AAPL, NESN.SW..." required style="flex:1;margin:0">
+        <select name="risk_tier" style="width:auto;margin:0">
+            <option value="growth">growth</option>
+            <option value="moonshot">moonshot</option>
+        </select>
+        <button type="submit" style="margin:0;white-space:nowrap">+ Add</button>
+    </form>
+    {% if watchlist %}
+    <div class="table-responsive">
+    <table>
+        <thead><tr><th>Symbol</th><th>Tier</th><th>Reason</th><th>Added</th><th></th></tr></thead>
+        <tbody>
+        {% for w in watchlist %}
+        <tr>
+            <td><strong>{{ w.symbol }}</strong></td>
+            <td><span class="badge badge-{{ w.risk_tier|default('growth') }}">{{ w.risk_tier|default('growth') }}</span></td>
+            <td><small>{{ w.reason|default('') }}</small></td>
+            <td>{{ w.added_at[:10] }}</td>
+            <td>
+                <form method="post" action="/watchlist/remove" style="margin:0">
+                    {{ csrf_hidden }}
+                    <input type="hidden" name="symbol" value="{{ w.symbol }}">
+                    <button type="submit" class="outline" style="margin:0;padding:0.2rem 0.5rem;font-size:0.75rem">x</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p>Watchlist is empty. Add symbols above or run the screener.</p>
+    {% endif %}
+</article>
 {% endblock %}
 
 {% block scripts %}
-{% if equity_values or sector_exposure %}
 <script>
 document.addEventListener('DOMContentLoaded', () => {
+    // ── Market Clock ────────────────────────────────────────
+    const clockLocal = document.getElementById('clock-local');
+    const clockNyse = document.getElementById('clock-nyse');
+    const marketDot = document.getElementById('market-dot');
+    const marketLabel = document.getElementById('market-label');
+    if (clockLocal && clockNyse) {
+        const fmtLocal = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+        const fmtNyse = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'America/New_York' });
+        const fmtTz = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' });
+        const localTz = fmtTz.formatToParts(new Date()).find(p => p.type === 'timeZoneName')?.value || '';
+
+        function updateClock() {
+            const now = new Date();
+            clockLocal.textContent = fmtLocal.format(now) + ' ' + localTz;
+            clockNyse.textContent = fmtNyse.format(now) + ' ET';
+            // Market open: Mon-Fri 9:30-16:00 ET
+            const nyParts = new Intl.DateTimeFormat('en-US', {
+                timeZone: 'America/New_York',
+                hour: 'numeric', minute: 'numeric', weekday: 'short', hour12: false,
+            }).formatToParts(now);
+            const dow = nyParts.find(p => p.type === 'weekday')?.value;
+            const h = parseInt(nyParts.find(p => p.type === 'hour')?.value || '0');
+            const m = parseInt(nyParts.find(p => p.type === 'minute')?.value || '0');
+            const mins = h * 60 + m;
+            const weekday = !['Sat', 'Sun'].includes(dow);
+            const isOpen = weekday && mins >= 570 && mins < 960; // 9:30=570, 16:00=960
+            marketDot.classList.toggle('open', isOpen);
+            if (marketLabel) marketLabel.textContent = isOpen ? 'OPEN' : 'CLOSED';
+        }
+        updateClock();
+        setInterval(updateClock, 1000);
+    }
+
 {% if equity_values %}
     const equityCtx = document.getElementById('equity-chart').getContext('2d');
+    const initialCash = {{ initial_cash }};
+    const activeRange = '{{ active_range }}';
+    const rawDates = {{ equity_dates | tojson }};
+
+    // Format date labels based on active range
+    const dateLabels = rawDates.map(d => {
+        if (activeRange === '1d') {
+            // Show HH:MM (extract from ISO-ish timestamp)
+            return d.length > 10 ? d.slice(11, 16) : d;
+        } else if (activeRange === '5d' || activeRange === '1m') {
+            // Show MM-DD
+            return d.length >= 10 ? d.slice(5, 10) : d;
+        }
+        // 3m / all — full date YYYY-MM-DD
+        return d.length >= 10 ? d.slice(0, 10) : d;
+    });
+
     const datasets = [{
-        label: 'Portfolio Value (CHF)',
+        label: 'Total Fortune (CHF)',
         data: {{ equity_values | tojson }},
         borderColor: '#e2a93b',
         backgroundColor: 'rgba(226, 169, 59, 0.08)',
@@ -159,45 +283,98 @@ document.addEventListener('DOMContentLoaded', () => {
         spanGaps: true,
     });
     {% endif %}
+
+    // Break-even annotation line at initial capital
+    const breakEvenPlugin = {
+        id: 'breakEvenLine',
+        afterDraw(chart) {
+            const yScale = chart.scales.y;
+            const yPixel = yScale.getPixelForValue(initialCash);
+            if (yPixel < yScale.top || yPixel > yScale.bottom) return;
+            const ctx = chart.ctx;
+            ctx.save();
+            ctx.beginPath();
+            ctx.setLineDash([6, 4]);
+            ctx.strokeStyle = 'rgba(248, 81, 73, 0.45)';
+            ctx.lineWidth = 1;
+            ctx.moveTo(chart.chartArea.left, yPixel);
+            ctx.lineTo(chart.chartArea.right, yPixel);
+            ctx.stroke();
+            // Label
+            ctx.fillStyle = 'rgba(248, 81, 73, 0.65)';
+            ctx.font = '10px DM Mono, monospace';
+            ctx.textAlign = 'left';
+            ctx.fillText(initialCash.toFixed(0) + ' CHF', chart.chartArea.left + 4, yPixel - 4);
+            ctx.restore();
+        }
+    };
+
     new Chart(equityCtx, {
         type: 'line',
         data: {
-            labels: {{ equity_dates | tojson }},
+            labels: dateLabels,
             datasets: datasets,
         },
         options: {
             responsive: true,
             interaction: { intersect: false, mode: 'index' },
             plugins: {
-                legend: {
-                    display: datasets.length > 1,
-                    labels: { color: '#6b7688', font: { family: 'DM Mono', size: 11 } },
-                },
+                legend: { display: false },
                 tooltip: {
-                    backgroundColor: '#1a1f2e',
+                    backgroundColor: 'rgba(15, 20, 25, 0.95)',
                     borderColor: '#2a3040',
                     borderWidth: 1,
-                    titleFont: { family: 'DM Mono', size: 12 },
-                    bodyFont: { family: 'DM Mono', size: 12 },
-                    titleColor: '#c9d1d9',
-                    bodyColor: '#e2a93b',
-                    padding: 10,
+                    titleFont: { family: 'DM Mono, monospace', size: 11 },
+                    bodyFont: { family: 'DM Mono, monospace', size: 11 },
+                    titleColor: '#6b7688',
+                    bodyColor: '#e6edf3',
+                    padding: { top: 8, bottom: 8, left: 10, right: 10 },
                     cornerRadius: 6,
+                    displayColors: true,
+                    boxWidth: 10,
+                    boxHeight: 3,
+                    boxPadding: 4,
+                    callbacks: {
+                        label: function(ctx) {
+                            return ' ' + ctx.dataset.label + ':  ' + ctx.parsed.y.toFixed(2) + ' CHF';
+                        }
+                    }
                 },
             },
             scales: {
                 x: {
-                    grid: { color: 'rgba(42, 48, 64, 0.5)' },
-                    ticks: { color: '#6b7688', font: { family: 'DM Mono', size: 10 }, maxTicksLimit: 10 },
+                    grid: { color: 'rgba(42, 48, 64, 0.35)', lineWidth: 0.5 },
+                    ticks: {
+                        color: '#4e5868',
+                        font: { family: 'DM Mono, monospace', size: 9 },
+                        maxTicksLimit: activeRange === '1d' ? 8 : 10,
+                        maxRotation: 0,
+                    },
+                    border: { color: 'rgba(42, 48, 64, 0.5)' },
                 },
                 y: {
                     beginAtZero: false,
-                    grid: { color: 'rgba(42, 48, 64, 0.5)' },
-                    ticks: { color: '#6b7688', font: { family: 'DM Mono', size: 10 } },
+                    grid: { color: 'rgba(42, 48, 64, 0.35)', lineWidth: 0.5 },
+                    ticks: {
+                        color: '#4e5868',
+                        font: { family: 'DM Mono, monospace', size: 9 },
+                        callback: v => v.toFixed(0),
+                    },
+                    border: { display: false },
                 },
             }
-        }
+        },
+        plugins: [breakEvenPlugin],
     });
+
+    // ── Custom legend ───────────────────────────────────────
+    const legendEl = document.getElementById('equity-legend');
+    if (legendEl) {
+        legendEl.innerHTML =
+            '<span class="chart-legend__item"><span class="chart-legend__swatch" style="background:#e2a93b"></span>Total Fortune</span>' +
+            {% if benchmark_values %}'<span class="chart-legend__item"><span class="chart-legend__swatch chart-legend__swatch--dashed" style="color:#6b7688"></span>SPY Buy &amp; Hold</span>' +{% endif %}
+            '<span class="chart-legend__item"><span class="chart-legend__swatch chart-legend__swatch--break" style="color:rgba(248,81,73,0.55)"></span>' + initialCash.toFixed(0) + ' CHF break-even</span>';
+    }
 {% endif %}
 {% if sector_exposure %}
     const sectorColors = [
@@ -246,5 +423,4 @@ document.addEventListener('DOMContentLoaded', () => {
 {% endif %}
 });
 </script>
-{% endif %}
 {% endblock %}

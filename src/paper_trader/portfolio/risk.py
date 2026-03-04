@@ -3,7 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 from paper_trader.config import get_tier_settings, settings
+from paper_trader.portfolio.currency import symbol_currency, to_chf
 from paper_trader.portfolio.tools import check_sector_cap, get_sector
+
+
+def _pos_value_chf(pos: dict[str, Any], usd_chf_rate: float) -> float:
+    """Position market value in CHF."""
+    price = pos.get("current_price", pos["avg_cost"])
+    currency = pos.get("currency") or symbol_currency(pos["symbol"])
+    return to_chf(pos["shares"] * price, currency, usd_chf_rate)
 
 
 def check_risk(
@@ -15,9 +23,11 @@ def check_risk(
     positions: list[dict[str, Any]],
     initial_cash: float | None = None,
     risk_tier: str = "growth",
+    usd_chf_rate: float = 1.0,
 ) -> dict[str, Any]:
     """
     Run all risk checks before executing a trade.
+    All value comparisons are in CHF (cash is already CHF).
     Returns {"ok": True} or {"ok": False, "reason": "..."}.
     May return {"ok": True, "adjusted_shares": N} if size was reduced.
     """
@@ -36,11 +46,12 @@ def check_risk(
     if action == "SELL":
         return {"ok": True}
 
-    total_cost = shares * price
+    currency = symbol_currency(symbol)
+    cost_chf = to_chf(shares * price, currency, usd_chf_rate)
 
-    # 1. Safety stop: total portfolio value check
-    positions_value = sum(p["shares"] * p.get("current_price", p["avg_cost"]) for p in positions)
-    estimated_total = cash + positions_value
+    # 1. Safety stop: total portfolio value check (all in CHF)
+    positions_value_chf = sum(_pos_value_chf(p, usd_chf_rate) for p in positions)
+    estimated_total = cash + positions_value_chf
     safety_threshold = initial_cash * settings.safety_stop_pct
 
     if estimated_total < safety_threshold:
@@ -49,74 +60,79 @@ def check_risk(
             "reason": f"Safety stop: portfolio ({estimated_total:.2f}) below {safety_threshold:.2f} ({settings.safety_stop_pct*100:.0f}% of initial)",
         }
 
-    # 2. Sufficient cash
-    if total_cost > cash:
+    # 2. Sufficient cash (cost in CHF vs CHF cash)
+    if cost_chf > cash:
         # Try reducing size to fit
-        max_shares = cash / price
+        price_chf = to_chf(price, currency, usd_chf_rate)
+        max_shares = cash / price_chf if price_chf > 0 else 0
         if max_shares < 0.01:
-            return {"ok": False, "reason": f"Insufficient cash ({cash:.2f}) for {symbol}"}
+            return {"ok": False, "reason": f"Insufficient cash ({cash:.2f} CHF) for {symbol}"}
         shares = max_shares
-        total_cost = shares * price
+        cost_chf = to_chf(shares * price, currency, usd_chf_rate)
 
     # 3. Cash reserve: keep minimum cash
-    if cash - total_cost < settings.min_cash_reserve:
+    if cash - cost_chf < settings.min_cash_reserve:
         available = cash - settings.min_cash_reserve
         if available <= 0:
             return {
                 "ok": False,
                 "reason": f"Cash reserve: only {cash:.2f} available, need to keep {settings.min_cash_reserve:.2f}",
             }
-        shares = available / price
-        total_cost = shares * price
+        price_chf = to_chf(price, currency, usd_chf_rate)
+        shares = available / price_chf if price_chf > 0 else 0
+        cost_chf = to_chf(shares * price, currency, usd_chf_rate)
 
     # 4. Position limit: tier-aware (growth: 25%, moonshot: 10%)
-    portfolio_total = cash + positions_value
+    portfolio_total = cash + positions_value_chf
     tier_cfg = get_tier_settings(risk_tier)
     max_position_value = portfolio_total * tier_cfg["max_position_pct"]
 
-    # Check existing position + new purchase
+    # Check existing position + new purchase (in CHF)
     existing = next((p for p in positions if p["symbol"] == symbol), None)
-    existing_value = (existing["shares"] * existing.get("current_price", existing["avg_cost"])) if existing else 0.0
-    new_total_value = existing_value + total_cost
+    existing_value_chf = _pos_value_chf(existing, usd_chf_rate) if existing else 0.0
+    new_total_value = existing_value_chf + cost_chf
 
     if new_total_value > max_position_value:
-        allowed_value = max_position_value - existing_value
+        allowed_value = max_position_value - existing_value_chf
         if allowed_value <= 0:
             return {
                 "ok": False,
-                "reason": f"Position limit ({risk_tier}): {symbol} already at max ({existing_value:.2f}/{max_position_value:.2f})",
+                "reason": f"Position limit ({risk_tier}): {symbol} already at max ({existing_value_chf:.2f}/{max_position_value:.2f})",
             }
-        shares = allowed_value / price
-        total_cost = shares * price
+        price_chf = to_chf(price, currency, usd_chf_rate)
+        shares = allowed_value / price_chf if price_chf > 0 else 0
+        cost_chf = to_chf(shares * price, currency, usd_chf_rate)
 
     if shares < 0.01:
         return {"ok": False, "reason": "Trade too small after risk adjustments"}
 
     # 4b. Bucket limit: total allocation per tier (growth: 65%, moonshot: 20%)
     tier_total = sum(
-        p["shares"] * p.get("current_price", p["avg_cost"])
+        _pos_value_chf(p, usd_chf_rate)
         for p in positions
         if p.get("risk_tier", "growth") == risk_tier
     )
     max_bucket_value = portfolio_total * tier_cfg["max_bucket_pct"]
-    if tier_total + total_cost > max_bucket_value:
+    if tier_total + cost_chf > max_bucket_value:
         allowed_bucket = max_bucket_value - tier_total
         if allowed_bucket <= 0:
             return {
                 "ok": False,
                 "reason": f"Bucket limit ({risk_tier}): tier at {tier_total:.2f}/{max_bucket_value:.2f}",
             }
-        shares = min(shares, allowed_bucket / price)
-        total_cost = shares * price
+        price_chf = to_chf(price, currency, usd_chf_rate)
+        shares = min(shares, allowed_bucket / price_chf if price_chf > 0 else 0)
+        cost_chf = to_chf(shares * price, currency, usd_chf_rate)
 
     if shares < 0.01:
         return {"ok": False, "reason": "Trade too small after risk adjustments"}
 
     # 5. Sector cap: no sector > sector_cap_pct of portfolio (ETFs/Unknown exempt)
     sector_check = check_sector_cap(
-        symbol, shares * price, positions,
+        symbol, cost_chf, positions,
         {p["symbol"]: p.get("current_price", p["avg_cost"]) for p in positions},
         portfolio_value=portfolio_total,
+        usd_chf_rate=usd_chf_rate,
     )
     if not sector_check["ok"]:
         return sector_check

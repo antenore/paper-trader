@@ -18,14 +18,19 @@
         {{ csrf_hidden }}
         <div class="grid">
             <label>
+                Account balance (USD)
+                <input type="number" name="config.api_account_balance_usd" value="{{ config['config.api_account_balance_usd'] }}" step="0.01" min="0">
+                <small>Anthropic pre-paid credit loaded — used to compute remaining balance</small>
+            </label>
+            <label>
                 Warning threshold (USD)
                 <input type="number" name="config.budget_warn_usd" value="{{ config['config.budget_warn_usd'] }}" step="0.01" min="0">
-                <small>Alert shown on dashboard when monthly spend exceeds this</small>
+                <small>Alert shown when total (all-time) spend exceeds this</small>
             </label>
             <label>
                 Hard stop (USD)
                 <input type="number" name="config.budget_hard_stop_usd" value="{{ config['config.budget_hard_stop_usd'] }}" step="0.01" min="0">
-                <small>Trading pauses when monthly spend reaches this limit</small>
+                <small>Trading pauses when total (all-time) spend reaches this</small>
             </label>
         </div>
         <button type="submit">Save Budget</button>
@@ -137,6 +142,37 @@
             </label>
         </div>
         <button type="submit">Save Tiers</button>
+    </form>
+</article>
+
+<!-- AI Tool Use -->
+<article>
+    <h3>AI Tool Use</h3>
+    <form method="post" action="/settings/config">
+        {{ csrf_hidden }}
+        <p><small>Calculator tools give Claude exact arithmetic via API function calling instead of mental math.</small></p>
+        <fieldset>
+            <input type="hidden" name="config.enable_tool_use" value="false">
+            <label>
+                <input type="checkbox" name="config.enable_tool_use" value="true" role="switch" {{ 'checked' if config['config.enable_tool_use'] in ['True', 'true', True] }}>
+                Enable tool use
+            </label>
+            <small>Claude calls position_size, calculate_pnl, etc. during analysis</small>
+        </fieldset>
+        <fieldset>
+            <input type="hidden" name="config.require_tool_evidence" value="false">
+            <label>
+                <input type="checkbox" name="config.require_tool_evidence" value="true" role="switch" {{ 'checked' if config['config.require_tool_evidence'] in ['True', 'true', True] }}>
+                Require tool evidence
+            </label>
+            <small>Reject BUY decisions that didn't call position_size (strict mode)</small>
+        </fieldset>
+        <label>
+            Max tool-use turns
+            <input type="number" name="config.tool_use_max_turns" value="{{ config['config.tool_use_max_turns'] }}" step="1" min="1" max="10">
+            <small>Max API round-trips per analysis (more turns = more accurate but higher cost)</small>
+        </label>
+        <button type="submit">Save Tool Use</button>
     </form>
 </article>
 

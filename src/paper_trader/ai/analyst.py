@@ -5,12 +5,13 @@ from typing import Any
 
 import aiosqlite
 
+from paper_trader.ai.calculator import CALCULATOR_TOOLS, ToolUseAudit, execute_tool
 from paper_trader.ai.client import AIClient
 from paper_trader.ai.models import AnalysisResult, StockDecision
-from paper_trader.ai.prompts import ANALYSIS_SYSTEM, analysis_prompt
-from paper_trader.config import MODEL_SONNET
+from paper_trader.ai.prompts import ANALYSIS_SYSTEM, analysis_prompt, get_analysis_system
+from paper_trader.config import MODEL_SONNET, settings
 from paper_trader.db import queries
-from paper_trader.market.news import fetch_symbol_news, format_news_for_ai
+from paper_trader.market.news import NewsItem, format_news_for_ai
 from paper_trader.market.prices import MarketDataProvider
 from paper_trader.portfolio.manager import get_portfolio_value
 from paper_trader.portfolio.tools import build_tools_context
@@ -41,16 +42,27 @@ async def run_analysis(
     # Get current prices
     prices = await market.get_current_prices(all_symbols)
 
-    # Get portfolio value
-    portfolio = await get_portfolio_value(db, prices, is_dry_run=is_dry_run)
+    # Fetch FX rate
+    usd_chf_rate = 1.0
+    try:
+        fx_prices = await market.get_current_prices([settings.fx_pair])
+        usd_chf_rate = fx_prices.get(settings.fx_pair, 1.0)
+    except Exception:
+        logger.debug("FX rate unavailable for analysis, using 1.0")
+
+    # Get portfolio value (FX-aware)
+    portfolio = await get_portfolio_value(db, prices, is_dry_run=is_dry_run, usd_chf_rate=usd_chf_rate)
     portfolio_summary = (
         f"Cash: {portfolio['cash']:.2f} CHF\n"
         f"Positions value: {portfolio['positions_value']:.2f} CHF\n"
         f"Total: {portfolio['total_value']:.2f} CHF\n"
     )
+    if usd_chf_rate != 1.0:
+        portfolio_summary += f"USD/CHF: {usd_chf_rate:.4f}\n"
     for pos in portfolio["positions"]:
+        currency_label = pos.get("currency", "USD")
         portfolio_summary += (
-            f"  {pos['symbol']}: {pos['shares']:.2f} shares @ {pos['avg_cost']:.2f} "
+            f"  {pos['symbol']} [{currency_label}]: {pos['shares']:.2f} shares @ {pos['avg_cost']:.2f} "
             f"(now {pos['current_price']:.2f}, P&L: {pos['pnl']:.2f})\n"
         )
 
@@ -66,10 +78,22 @@ async def run_analysis(
                 price_lines.append(f"{symbol}: ${prices[symbol]:.2f}")
     price_data = "\n".join(price_lines)
 
-    # Get news for position symbols (more relevant)
-    news_items = []
-    for symbol in position_symbols[:5]:  # Limit to avoid too many requests
-        news_items.extend(await fetch_symbol_news(symbol, max_items=2))
+    # Read pre-cached news from DB (populated asynchronously by the news_fetch job).
+    # This never blocks the analysis pipeline on network I/O.
+    news_rows = await queries.get_recent_news(
+        db, hours=settings.news_max_age_hours, symbols=position_symbols or None
+    )
+    news_items = [
+        NewsItem(
+            title=r["title"],
+            summary=r.get("summary") or "",
+            link=r.get("link") or "",
+            source=r["source"],
+            published=r.get("published_at") or "",
+            symbol=r.get("symbol"),
+        )
+        for r in news_rows
+    ]
     news_text = format_news_for_ai(news_items)
 
     # Build tools context (stop-loss, sector, correlation, RS, ETF overlap)
@@ -79,16 +103,41 @@ async def run_analysis(
     except Exception:
         logger.debug("Tools context build failed, continuing without it", exc_info=True)
 
-    # Call AI
-    raw = await ai_client.call(
-        model=MODEL_SONNET,
-        system=ANALYSIS_SYSTEM,
-        prompt=analysis_prompt(portfolio_summary, watchlist_symbols, price_data, news_text, tools_context=tools_context, watchlist_tiers=watchlist_tiers),
-        purpose="analysis",
-        is_dry_run=is_dry_run,
+    # Call AI (with or without calculator tools)
+    prompt_text = analysis_prompt(
+        portfolio_summary, watchlist_symbols, price_data, news_text,
+        tools_context=tools_context, watchlist_tiers=watchlist_tiers,
     )
 
+    if settings.enable_tool_use:
+        audit = ToolUseAudit()
+        response = await ai_client.call_with_tools(
+            model=MODEL_SONNET,
+            system=get_analysis_system(enable_tools=True),
+            prompt=prompt_text,
+            purpose="analysis",
+            tools=CALCULATOR_TOOLS,
+            execute_tool=execute_tool,
+            audit=audit,
+            is_dry_run=is_dry_run,
+        )
+        raw = response.data
+        logger.info(
+            "Analysis used %d tool calls in %d turns",
+            len(audit.calls), audit.turns,
+        )
+    else:
+        raw = await ai_client.call(
+            model=MODEL_SONNET,
+            system=ANALYSIS_SYSTEM,
+            prompt=prompt_text,
+            purpose="analysis",
+            is_dry_run=is_dry_run,
+        )
+        audit = None
+
     result = AnalysisResult(**raw)
+    result.tool_audit = audit
 
     # Record decisions
     for decision in result.decisions:
@@ -100,6 +149,7 @@ async def run_analysis(
             decision.reasoning,
             MODEL_SONNET,
             is_dry_run=is_dry_run,
+            alpha_source=decision.alpha_source,
         )
 
     return result

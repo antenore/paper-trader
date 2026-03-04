@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 import anthropic
 import aiosqlite
@@ -21,6 +22,17 @@ class APIPausedError(Exception):
     """Raised when API calls are paused."""
 
 
+@dataclass
+class ToolUseResponse:
+    """Response from a multi-turn tool-use call."""
+    data: dict[str, Any]
+    audit: Any = None  # ToolUseAudit from calculator module
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cost: float = 0.0
+    turns: int = 0
+
+
 class AIClient:
     """
     Single chokepoint for all AI calls.
@@ -30,7 +42,8 @@ class AIClient:
     def __init__(self, db: aiosqlite.Connection, api_key: str | None = None):
         self._db = db
         self._client = anthropic.AsyncAnthropic(
-            api_key=api_key or settings.anthropic_api_key
+            api_key=api_key or settings.anthropic_api_key,
+            max_retries=5,
         )
 
     async def call(
@@ -52,20 +65,23 @@ class AIClient:
             reason = await queries.get_setting(self._db, "pause_reason") or "Manual pause"
             raise APIPausedError(f"API calls paused: {reason}")
 
-        # Check monthly budget (exclude dry run costs from budget enforcement)
-        monthly_spend = await queries.get_monthly_spend(self._db, include_dry_run=False)
+        # Check total (all-time) spend against account balance — exclude dry run costs
+        total_spend = await queries.get_total_spend(self._db, include_dry_run=False)
 
-        if monthly_spend >= settings.budget_hard_stop_usd:
+        if total_spend >= settings.budget_hard_stop_usd:
             await queries.set_setting(self._db, "api_paused", "true")
-            await queries.set_setting(self._db, "pause_reason", "Monthly budget hard stop ($50)")
+            await queries.set_setting(
+                self._db, "pause_reason",
+                f"API budget hard stop (${total_spend:.2f} spent of ${settings.api_account_balance_usd:.2f})",
+            )
             raise BudgetExceededError(
-                f"Monthly spend ${monthly_spend:.2f} >= hard stop ${settings.budget_hard_stop_usd:.2f}"
+                f"Total spend ${total_spend:.2f} >= hard stop ${settings.budget_hard_stop_usd:.2f}"
             )
 
-        if monthly_spend >= settings.budget_warn_usd:
+        if total_spend >= settings.budget_warn_usd:
             logger.warning(
-                "Budget warning: monthly spend $%.2f approaching limit $%.2f",
-                monthly_spend, settings.budget_hard_stop_usd,
+                "Budget warning: total spend $%.2f approaching limit $%.2f (balance: $%.2f)",
+                total_spend, settings.budget_hard_stop_usd, settings.api_account_balance_usd,
             )
 
         # Make the API call
@@ -108,6 +124,199 @@ class AIClient:
                 json_str = text.split("```")[1].split("```")[0].strip()
                 return json.loads(json_str)
             raise
+
+    async def call_with_tools(
+        self,
+        model: str,
+        system: str,
+        prompt: str,
+        purpose: str,
+        tools: list[dict[str, Any]],
+        execute_tool: Callable[[str, dict[str, Any]], dict[str, Any]],
+        audit: Any = None,
+        is_dry_run: bool = False,
+        max_tokens: int = 4096,
+        max_turns: int | None = None,
+    ) -> ToolUseResponse:
+        """
+        Make an AI call with tool use (multi-turn loop).
+
+        Sends the prompt with tool definitions. If Claude responds with tool_use
+        blocks, executes them locally and feeds results back. Repeats until Claude
+        returns end_turn or max_turns is reached.
+        """
+        if max_turns is None:
+            max_turns = settings.tool_use_max_turns
+
+        # Budget/pause checks (same as call())
+        paused = await queries.get_setting(self._db, "api_paused")
+        if paused == "true":
+            reason = await queries.get_setting(self._db, "pause_reason") or "Manual pause"
+            raise APIPausedError(f"API calls paused: {reason}")
+
+        total_spend = await queries.get_total_spend(self._db, include_dry_run=False)
+        if total_spend >= settings.budget_hard_stop_usd:
+            await queries.set_setting(self._db, "api_paused", "true")
+            await queries.set_setting(
+                self._db, "pause_reason",
+                f"API budget hard stop (${total_spend:.2f} spent of ${settings.api_account_balance_usd:.2f})",
+            )
+            raise BudgetExceededError(
+                f"Total spend ${total_spend:.2f} >= hard stop ${settings.budget_hard_stop_usd:.2f}"
+            )
+
+        if total_spend >= settings.budget_warn_usd:
+            logger.warning(
+                "Budget warning: total spend $%.2f approaching limit $%.2f",
+                total_spend, settings.budget_hard_stop_usd,
+            )
+
+        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+        total_input = 0
+        total_output = 0
+        total_cost = 0.0
+        turns = 0
+
+        for turn in range(max_turns):
+            turns += 1
+            response = await self._client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=messages,
+                tools=tools,
+            )
+
+            in_tok = response.usage.input_tokens
+            out_tok = response.usage.output_tokens
+            cost = self._calculate_cost(model, in_tok, out_tok)
+            total_input += in_tok
+            total_output += out_tok
+            total_cost += cost
+
+            # Check if Claude wants to use tools
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+
+            if response.stop_reason != "tool_use" or not tool_use_blocks:
+                # Final response — extract text and parse JSON
+                text_blocks = [b for b in response.content if b.type == "text"]
+                text = text_blocks[0].text if text_blocks else ""
+                break
+
+            # Execute tool calls and build result messages
+            assistant_content = response.content
+            tool_results = []
+            for block in tool_use_blocks:
+                result = execute_tool(block.name, block.input)
+                logger.info(
+                    "Tool use turn %d: %s(%s) → %s",
+                    turn + 1, block.name, block.input.get("symbol", ""), result,
+                )
+                if audit is not None:
+                    audit.record(block.name, block.input, result)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result),
+                })
+
+            messages.append({"role": "assistant", "content": assistant_content})
+            messages.append({"role": "user", "content": tool_results})
+        else:
+            # Max turns exhausted
+            logger.warning("Tool use max turns (%d) reached for %s", max_turns, purpose)
+
+            # If last response was tool_use, execute the tools and make one
+            # final call WITHOUT tools to force a JSON text response.
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+            if tool_use_blocks:
+                assistant_content = response.content
+                tool_results = []
+                for block in tool_use_blocks:
+                    result = execute_tool(block.name, block.input)
+                    logger.info(
+                        "Tool use final turn: %s(%s) → %s",
+                        block.name, block.input.get("symbol", ""), result,
+                    )
+                    if audit is not None:
+                        audit.record(block.name, block.input, result)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(result),
+                    })
+
+                messages.append({"role": "assistant", "content": assistant_content})
+                messages.append({"role": "user", "content": tool_results})
+
+                # Ask explicitly for the JSON response
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You have used all available tool turns. "
+                        "Now produce your final JSON response based on the "
+                        "tool results and analysis so far."
+                    ),
+                })
+
+                # Final call without tools — forces text-only JSON response
+                response = await self._client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=system,
+                    messages=messages,
+                )
+                in_tok = response.usage.input_tokens
+                out_tok = response.usage.output_tokens
+                cost = self._calculate_cost(model, in_tok, out_tok)
+                total_input += in_tok
+                total_output += out_tok
+                total_cost += cost
+                turns += 1
+
+            text_blocks = [b for b in response.content if b.type == "text"]
+            text = text_blocks[0].text if text_blocks else ""
+            if not text.strip():
+                logger.error(
+                    "Empty text after max turns for %s. Response blocks: %s",
+                    purpose, [b.type for b in response.content],
+                )
+
+        # Record aggregated cost
+        await queries.record_api_call(
+            self._db, model, purpose, total_input, total_output, total_cost, is_dry_run,
+        )
+
+        logger.info(
+            "AI call [%s] %s (tool-use): %d turns, %d in / %d out = $%.4f",
+            model.split("-")[1] if "-" in model else model,
+            purpose, turns, total_input, total_output, total_cost,
+        )
+
+        # Parse JSON from final text
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            if "```json" in text:
+                json_str = text.split("```json")[1].split("```")[0].strip()
+                data = json.loads(json_str)
+            elif "```" in text:
+                json_str = text.split("```")[1].split("```")[0].strip()
+                data = json.loads(json_str)
+            else:
+                raise
+
+        if audit is not None:
+            audit.turns = turns
+
+        return ToolUseResponse(
+            data=data,
+            audit=audit,
+            total_input_tokens=total_input,
+            total_output_tokens=total_output,
+            total_cost=total_cost,
+            turns=turns,
+        )
 
     @staticmethod
     def _calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:

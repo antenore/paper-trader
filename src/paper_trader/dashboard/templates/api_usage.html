@@ -8,16 +8,16 @@
 
 <div class="stat-grid">
     <div class="stat-card">
-        <div class="label">Monthly Spend</div>
-        <div class="value {% if monthly_spend >= budget_warn %}warning{% endif %}">${{ "%.2f"|format(monthly_spend) }}</div>
+        <div class="label">Account Balance</div>
+        <div class="value">${{ "%.2f"|format(account_balance) }}</div>
     </div>
     <div class="stat-card">
-        <div class="label">Budget Limit</div>
-        <div class="value">${{ "%.2f"|format(budget_limit) }}</div>
+        <div class="label">Total Spent</div>
+        <div class="value {% if total_spend >= budget_warn %}warning{% endif %}">${{ "%.2f"|format(total_spend) }}</div>
     </div>
     <div class="stat-card">
         <div class="label">Remaining</div>
-        <div class="value">${{ "%.2f"|format(budget_limit - monthly_spend) }}</div>
+        <div class="value {% if (account_balance - total_spend) < (account_balance - budget_limit) %}warning{% endif %}">${{ "%.2f"|format([account_balance - total_spend, 0]|max) }}</div>
     </div>
 </div>
 
@@ -43,7 +43,7 @@
     </table>
     </div>
     {% else %}
-    <p>No API calls recorded this month.</p>
+    <p>No API calls recorded yet.</p>
     {% endif %}
 </article>
 

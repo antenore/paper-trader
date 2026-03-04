@@ -60,8 +60,7 @@ class TestDryRun:
         with patch.object(ai_client, "call", side_effect=mock_call):
             with patch("paper_trader.trading.dry_run.load_historical_data", new_callable=AsyncMock, return_value=mock_data):
                 with patch("paper_trader.ai.screener.fetch_news", new_callable=AsyncMock, return_value=[]):
-                    with patch("paper_trader.ai.analyst.fetch_symbol_news", new_callable=AsyncMock, return_value=[]):
-                        result = await run_dry_run(db, ai_client, symbols=["AAPL", "GOOGL"], days=10)
+                    result = await run_dry_run(db, ai_client, symbols=["AAPL", "GOOGL"], days=10)
 
         assert "session_id" in result
         assert result["days_simulated"] > 0
@@ -101,8 +100,7 @@ class TestDryRun:
         with patch.object(ai_client, "call", side_effect=mock_call):
             with patch("paper_trader.trading.dry_run.load_historical_data", new_callable=AsyncMock, return_value=mock_data):
                 with patch("paper_trader.ai.screener.fetch_news", new_callable=AsyncMock, return_value=[]):
-                    with patch("paper_trader.ai.analyst.fetch_symbol_news", new_callable=AsyncMock, return_value=[]):
-                        await run_dry_run(db, ai_client, symbols=["AAPL"], days=5, on_progress=on_progress)
+                    await run_dry_run(db, ai_client, symbols=["AAPL"], days=5, on_progress=on_progress)
 
         assert len(progress_calls) > 0
 
@@ -129,8 +127,7 @@ class TestDryRunCashIsolation:
         with patch.object(ai_client, "call", side_effect=mock_call):
             with patch("paper_trader.trading.dry_run.load_historical_data", new_callable=AsyncMock, return_value=mock_data):
                 with patch("paper_trader.ai.screener.fetch_news", new_callable=AsyncMock, return_value=[]):
-                    with patch("paper_trader.ai.analyst.fetch_symbol_news", new_callable=AsyncMock, return_value=[]):
-                        await run_dry_run(db, ai_client, symbols=["AAPL"], days=5)
+                    await run_dry_run(db, ai_client, symbols=["AAPL"], days=5)
 
         portfolio = await queries.get_portfolio(db)
         assert portfolio["cash"] == 750.0, "Live cash must not be modified by dry run"
@@ -166,9 +163,8 @@ class TestDryRunCashIsolation:
         with patch.object(ai_client, "call", side_effect=mock_call):
             with patch("paper_trader.trading.dry_run.load_historical_data", new_callable=AsyncMock, return_value=mock_data):
                 with patch("paper_trader.ai.screener.fetch_news", new_callable=AsyncMock, return_value=[]):
-                    with patch("paper_trader.ai.analyst.fetch_symbol_news", new_callable=AsyncMock, return_value=[]):
-                        with patch("paper_trader.portfolio.manager.get_portfolio_value", new_callable=AsyncMock, side_effect=Exception("DB error")):
-                            result = await run_dry_run(db, ai_client, symbols=["AAPL"], days=5)
+                    with patch("paper_trader.portfolio.manager.get_portfolio_value", new_callable=AsyncMock, side_effect=Exception("DB error")):
+                        result = await run_dry_run(db, ai_client, symbols=["AAPL"], days=5)
 
         portfolio = await queries.get_portfolio(db)
         assert portfolio["cash"] == 500.0, "Live cash must not be modified even if finalization fails"
@@ -192,8 +188,7 @@ class TestDryRunCashIsolation:
         with patch.object(ai_client, "call", side_effect=mock_call):
             with patch("paper_trader.trading.dry_run.load_historical_data", new_callable=AsyncMock, return_value=mock_data):
                 with patch("paper_trader.ai.screener.fetch_news", new_callable=AsyncMock, return_value=[]):
-                    with patch("paper_trader.ai.analyst.fetch_symbol_news", new_callable=AsyncMock, return_value=[]):
-                        result = await run_dry_run(db, ai_client, symbols=["AAPL"], days=5)
+                    result = await run_dry_run(db, ai_client, symbols=["AAPL"], days=5)
 
         session = await queries.get_dry_run_session(db, result["session_id"])
         assert session["current_cash"] is not None, "Dry run session should track current_cash"
@@ -234,8 +229,7 @@ class TestDryRunSmallDataset:
         with patch.object(ai_client, "call", side_effect=mock_call):
             with patch("paper_trader.trading.dry_run.load_historical_data", new_callable=AsyncMock, return_value=mock_data):
                 with patch("paper_trader.ai.screener.fetch_news", new_callable=AsyncMock, return_value=[]):
-                    with patch("paper_trader.ai.analyst.fetch_symbol_news", new_callable=AsyncMock, return_value=[]):
-                        result = await run_dry_run(db, ai_client, symbols=["AAPL"], days=30)
+                    result = await run_dry_run(db, ai_client, symbols=["AAPL"], days=30)
 
         assert "error" not in result
         assert result["days_simulated"] == 1
@@ -264,8 +258,7 @@ class TestDryRunNoWatchlistMutation:
         with patch.object(ai_client, "call", side_effect=mock_call):
             with patch("paper_trader.trading.dry_run.load_historical_data", new_callable=AsyncMock, return_value=mock_data):
                 with patch("paper_trader.ai.screener.fetch_news", new_callable=AsyncMock, return_value=[]):
-                    with patch("paper_trader.ai.analyst.fetch_symbol_news", new_callable=AsyncMock, return_value=[]):
-                        await run_dry_run(db, ai_client, symbols=["AAPL", "GOOGL"], days=5)
+                    await run_dry_run(db, ai_client, symbols=["AAPL", "GOOGL"], days=5)
 
         after = await queries.get_watchlist(db)
         before_symbols = {w["symbol"] for w in before}
@@ -314,8 +307,7 @@ class TestDryRunBenchmarkSymbol:
         with patch.object(ai_client, "call", side_effect=mock_call):
             with patch("paper_trader.trading.dry_run.load_historical_data", new_callable=AsyncMock, return_value=mock_data) as mock_load:
                 with patch("paper_trader.ai.screener.fetch_news", new_callable=AsyncMock, return_value=[]):
-                    with patch("paper_trader.ai.analyst.fetch_symbol_news", new_callable=AsyncMock, return_value=[]):
-                        await run_dry_run(db, ai_client, symbols=["AAPL"], days=5)
+                    await run_dry_run(db, ai_client, symbols=["AAPL"], days=5)
 
         # The symbols list passed to load_historical_data should include SPY
         called_symbols = mock_load.call_args[0][0]
@@ -342,8 +334,7 @@ class TestDryRunBenchmarkSymbol:
         with patch.object(ai_client, "call", side_effect=mock_call):
             with patch("paper_trader.trading.dry_run.load_historical_data", new_callable=AsyncMock, return_value=mock_data) as mock_load:
                 with patch("paper_trader.ai.screener.fetch_news", new_callable=AsyncMock, return_value=[]):
-                    with patch("paper_trader.ai.analyst.fetch_symbol_news", new_callable=AsyncMock, return_value=[]):
-                        await run_dry_run(db, ai_client, symbols=["AAPL", "SPY"], days=5)
+                    await run_dry_run(db, ai_client, symbols=["AAPL", "SPY"], days=5)
 
         called_symbols = mock_load.call_args[0][0]
         assert called_symbols.count("SPY") == 1

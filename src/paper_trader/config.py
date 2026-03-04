@@ -33,9 +33,12 @@ class Settings(BaseSettings):
     max_position_pct: float = 0.40  # no single position > 40%
     min_cash_reserve: float = 50.0  # always keep 50 CHF
 
-    # API budget (USD)
-    budget_warn_usd: float = 45.0
-    budget_hard_stop_usd: float = 50.0
+    # API account balance — what you pre-loaded on Anthropic (USD)
+    api_account_balance_usd: float = 100.0
+
+    # API spend thresholds — compared against *total* (all-time) spend, not monthly
+    budget_warn_usd: float = 80.0        # alert when total spend reaches this
+    budget_hard_stop_usd: float = 95.0   # pause trading when total spend reaches this
 
     # Anthropic
     anthropic_api_key: str = ""
@@ -64,6 +67,9 @@ class Settings(BaseSettings):
     # Benchmark for alpha/beta comparison
     benchmark_symbol: str = "SPY"
 
+    # FX pair for USD/CHF tracking (yfinance ticker)
+    fx_pair: str = "USDCHF=X"
+
     # Stop-loss: auto-sell when price drops this fraction below entry
     stop_loss_pct: float = 0.07
 
@@ -75,6 +81,16 @@ class Settings(BaseSettings):
 
     # Correlation warning threshold (0-1)
     correlation_warn_threshold: float = 0.75
+
+    # News collection
+    news_fetch_interval_minutes: int = 30   # how often to run news_fetch job
+    news_max_age_hours: int = 6             # how far back to look when building AI context
+    news_cleanup_days: int = 7              # delete news older than this from DB
+
+    # Calculator tool use (Claude API function calling)
+    enable_tool_use: bool = False           # Feature flag (OFF by default)
+    tool_use_max_turns: int = 5             # Max multi-turn iterations in tool-use loop
+    require_tool_evidence: bool = False     # Strict mode: reject BUY without position_size call
 
     # ── Risk tiers (growth vs moonshot) ──────────────────────────────
     # Growth: established companies with clear momentum (AAPL, NVDA, etc.)
@@ -120,6 +136,10 @@ def _serialize_list(value: list[str]) -> str:
     return ", ".join(value)
 
 
+def _parse_bool(value: str) -> bool:
+    return value.strip().lower() in ("true", "1", "yes")
+
+
 CONFIG_KEYS: dict[str, tuple[str, type]] = {
     "config.budget_warn_usd": ("budget_warn_usd", float),
     "config.budget_hard_stop_usd": ("budget_hard_stop_usd", float),
@@ -141,6 +161,12 @@ CONFIG_KEYS: dict[str, tuple[str, type]] = {
     "config.moonshot_max_position_pct": ("moonshot_max_position_pct", float),
     "config.moonshot_stop_loss_pct": ("moonshot_stop_loss_pct", float),
     "config.moonshot_max_bucket_pct": ("moonshot_max_bucket_pct", float),
+    "config.news_max_age_hours": ("news_max_age_hours", int),
+    "config.news_cleanup_days": ("news_cleanup_days", int),
+    "config.api_account_balance_usd": ("api_account_balance_usd", float),
+    "config.enable_tool_use": ("enable_tool_use", bool),
+    "config.tool_use_max_turns": ("tool_use_max_turns", int),
+    "config.require_tool_evidence": ("require_tool_evidence", bool),
 }
 
 
@@ -157,6 +183,8 @@ async def load_config_from_db(db: aiosqlite.Connection) -> None:
         try:
             if type_conv is list:
                 value = _parse_list(raw_value)
+            elif type_conv is bool:
+                value = _parse_bool(raw_value)
             else:
                 value = type_conv(raw_value)
             object.__setattr__(settings, attr_name, value)
@@ -173,6 +201,8 @@ async def save_config_to_db(db: aiosqlite.Connection, key: str, value: str) -> b
     try:
         if type_conv is list:
             parsed = _parse_list(value)
+        elif type_conv is bool:
+            parsed = _parse_bool(value)
         else:
             parsed = type_conv(value)
     except (ValueError, TypeError):

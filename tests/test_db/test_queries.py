@@ -383,6 +383,88 @@ async def test_update_dry_run_cash_no_session_id_targets_latest(db):
 
 
 @pytest.mark.asyncio
+async def test_snapshot_with_fx_rate(db):
+    """record_snapshot stores usd_chf_rate."""
+    await queries.record_snapshot(db, 700.0, 100.0, spy_price=450.0, benchmark_value=800.0, usd_chf_rate=0.8812)
+    snaps = await queries.get_snapshots(db)
+    assert len(snaps) == 1
+    assert snaps[0]["usd_chf_rate"] == 0.8812
+
+
+@pytest.mark.asyncio
+async def test_snapshot_without_fx_rate(db):
+    """record_snapshot works without usd_chf_rate (backward compat)."""
+    await queries.record_snapshot(db, 700.0, 100.0)
+    snaps = await queries.get_snapshots(db)
+    assert snaps[0]["usd_chf_rate"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_first_fx_rate_with_data(db):
+    """get_first_fx_rate returns earliest non-NULL usd_chf_rate."""
+    await queries.record_snapshot(db, 700.0, 100.0)  # No FX
+    await queries.record_snapshot(db, 700.0, 100.0, usd_chf_rate=0.8800)
+    await queries.record_snapshot(db, 700.0, 100.0, usd_chf_rate=0.8850)
+
+    first = await queries.get_first_fx_rate(db)
+    assert first == 0.8800
+
+
+@pytest.mark.asyncio
+async def test_get_first_fx_rate_no_data(db):
+    """get_first_fx_rate returns None when no FX data exists."""
+    await queries.record_snapshot(db, 700.0, 100.0)
+    first = await queries.get_first_fx_rate(db)
+    assert first is None
+
+
+@pytest.mark.asyncio
+async def test_benchmark_summary_with_fx(db):
+    """get_benchmark_summary includes FX fields when usd_chf_rate is present."""
+    await db.execute(
+        """INSERT INTO portfolio_snapshots (cash, positions_value, total_value, is_dry_run, spy_price, benchmark_value, usd_chf_rate, snapshot_at)
+           VALUES (?, ?, ?, 0, ?, ?, ?, ?)""",
+        (700.0, 100.0, 800.0, 450.0, 800.0, 0.8800, "2025-06-01 10:00:00"),
+    )
+    await db.execute(
+        """INSERT INTO portfolio_snapshots (cash, positions_value, total_value, is_dry_run, spy_price, benchmark_value, usd_chf_rate, snapshot_at)
+           VALUES (?, ?, ?, 0, ?, ?, ?, ?)""",
+        (720.0, 120.0, 840.0, 460.0, 817.8, 0.8700, "2025-06-02 10:00:00"),
+    )
+    await db.commit()
+
+    summary = await queries.get_benchmark_summary(db)
+    assert summary is not None
+    assert summary["initial_fx_rate"] == 0.8800
+    assert summary["current_fx_rate"] == 0.8700
+    assert "fx_change_pct" in summary
+    assert "benchmark_value_chf" in summary
+    assert "fx_impact_pct" in summary
+    # USD weakened (rate dropped): fx_change_pct should be negative
+    assert summary["fx_change_pct"] < 0
+
+
+@pytest.mark.asyncio
+async def test_benchmark_summary_without_fx(db):
+    """get_benchmark_summary omits FX fields when usd_chf_rate is NULL."""
+    await db.execute(
+        """INSERT INTO portfolio_snapshots (cash, positions_value, total_value, is_dry_run, spy_price, benchmark_value, snapshot_at)
+           VALUES (?, ?, ?, 0, ?, ?, ?)""",
+        (700.0, 100.0, 800.0, 450.0, 800.0, "2025-06-01 10:00:00"),
+    )
+    await db.execute(
+        """INSERT INTO portfolio_snapshots (cash, positions_value, total_value, is_dry_run, spy_price, benchmark_value, snapshot_at)
+           VALUES (?, ?, ?, 0, ?, ?, ?)""",
+        (720.0, 120.0, 840.0, 460.0, 817.8, "2025-06-02 10:00:00"),
+    )
+    await db.commit()
+
+    summary = await queries.get_benchmark_summary(db)
+    assert summary is not None
+    assert "current_fx_rate" not in summary
+
+
+@pytest.mark.asyncio
 async def test_daily_spend_excludes_dry_run(db):
     """get_daily_spend(include_dry_run=False) should exclude dry run costs."""
     await queries.record_api_call(db, "haiku", "screening", 1000, 500, 0.003, is_dry_run=False)

@@ -2,6 +2,9 @@
 
 A random token is set as an HTTP-only cookie. Templates include the same token
 as a hidden form field.  On POST, the middleware verifies the two match.
+
+Note: We cache the parsed form data in request.state so that route handlers
+can access it after the middleware has consumed the body stream.
 """
 
 from __future__ import annotations
@@ -32,7 +35,13 @@ def _get_or_set_token(request: Request, response: Response) -> str:
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):
-    """Verify CSRF token on state-changing requests."""
+    """Verify CSRF token on state-changing requests.
+
+    BaseHTTPMiddleware wraps the request, so form data parsed here is NOT
+    available to the route handler via request.form() (body stream consumed).
+    We store the parsed form in request.state._csrf_form so route handlers
+    can fall back to it.
+    """
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
@@ -44,6 +53,8 @@ class CSRFMiddleware(BaseHTTPMiddleware):
                 content_type = request.headers.get("content-type", "")
                 if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
                     form = await request.form()
+                    # Cache for downstream handlers (body stream is consumed)
+                    request.state._csrf_form = form
                     form_token = form.get(FORM_FIELD)
                     if not form_token or form_token != cookie_token:
                         return Response("CSRF token mismatch", status_code=403)

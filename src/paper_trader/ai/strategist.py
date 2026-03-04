@@ -61,12 +61,17 @@ async def run_weekly_review(
     benchmark_text = ""
     benchmark = await queries.get_benchmark_summary(db, is_dry_run=is_dry_run)
     if benchmark:
+        cash_pct = portfolio['cash'] / portfolio['total_value'] if portfolio['total_value'] else 0
+        cash_alpha_effect = cash_pct * abs(benchmark['spy_return_pct'])
         benchmark_text = (
             f"{settings.benchmark_symbol}: ${benchmark['initial_spy']:.2f} → ${benchmark['current_spy']:.2f} "
             f"({benchmark['spy_return_pct']:+.1f}%) | "
             f"Portfolio: {benchmark['portfolio_return_pct']:+.1f}% | "
-            f"Alpha: {benchmark['alpha_pct']:+.1f}%"
+            f"Alpha: {benchmark['alpha_pct']:+.1f}% | "
+            f"Cash effect: {cash_alpha_effect:+.1f}% (cash weight: {cash_pct*100:.0f}%)"
         )
+        if benchmark.get('current_fx_rate'):
+            benchmark_text += f" | USD/CHF: {benchmark['current_fx_rate']:.4f} ({benchmark['fx_change_pct']:+.1f}%)"
 
     # Call AI
     raw = await ai_client.call(
@@ -144,14 +149,26 @@ async def run_monthly_review(
 
     # Benchmark comparison
     benchmark_text = ""
+    currency_text = ""
     benchmark = await queries.get_benchmark_summary(db, is_dry_run=is_dry_run)
     if benchmark:
+        cash_pct = portfolio['cash'] / portfolio['total_value'] if portfolio['total_value'] else 0
+        cash_alpha_effect = cash_pct * abs(benchmark['spy_return_pct'])
         benchmark_text = (
             f"{settings.benchmark_symbol}: ${benchmark['initial_spy']:.2f} → ${benchmark['current_spy']:.2f} "
             f"({benchmark['spy_return_pct']:+.1f}%) | "
             f"Portfolio: {benchmark['portfolio_return_pct']:+.1f}% | "
-            f"Alpha: {benchmark['alpha_pct']:+.1f}%"
+            f"Alpha: {benchmark['alpha_pct']:+.1f}% | "
+            f"Cash effect: {cash_alpha_effect:+.1f}% (cash weight: {cash_pct*100:.0f}%)"
         )
+        if benchmark.get('current_fx_rate'):
+            currency_text = (
+                f"USD/CHF: {benchmark['initial_fx_rate']:.4f} → {benchmark['current_fx_rate']:.4f} "
+                f"({benchmark['fx_change_pct']:+.1f}%)\n"
+                f"Portfolio (CHF-adjusted): {benchmark['portfolio_value_chf']:.2f} CHF\n"
+                f"Benchmark (CHF-adjusted): {benchmark['benchmark_value_chf']:.2f} CHF\n"
+                f"FX impact on returns: {benchmark['fx_impact_pct']:+.1f}%"
+            )
 
     # Call AI
     raw = await ai_client.call(
@@ -160,6 +177,7 @@ async def run_monthly_review(
         prompt=monthly_review_prompt(
             portfolio_summary, monthly_perf, journal_text, spend_text,
             benchmark_comparison=benchmark_text,
+            currency_data=currency_text,
         ),
         purpose="monthly_review",
         is_dry_run=is_dry_run,

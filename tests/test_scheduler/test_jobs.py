@@ -30,7 +30,11 @@ class TestSchedule:
         assert len(job_ids) == len(set(job_ids))
 
     def test_schedule_count(self):
-        assert len(SCHEDULE) == 6
+        assert len(SCHEDULE) == 7
+
+    def test_news_fetch_job_exists(self):
+        job_ids = [entry[2] for entry in SCHEDULE]
+        assert "news_fetch" in job_ids
 
 
 class TestManualTrigger:
@@ -70,7 +74,8 @@ class TestManualTrigger:
 
     def test_get_job_statuses_returns_all(self):
         statuses = get_job_statuses()
-        assert len(statuses) == 6
+        assert len(statuses) == 7
         job_ids = [s["job_id"] for s in statuses]
         assert "morning_scan" in job_ids
         assert "weekly_review" in job_ids
+        assert "news_fetch" in job_ids

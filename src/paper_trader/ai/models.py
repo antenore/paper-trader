@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -17,6 +19,11 @@ class StockDecision(BaseModel):
         default="growth",
         pattern="^(growth|moonshot)$",
         description="Risk tier: 'growth' for stable large-caps, 'moonshot' for speculative plays",
+    )
+    alpha_source: str = Field(
+        default="",
+        pattern="^(RELATIVE_STRENGTH|MEAN_REVERSION|CATALYST|SECTOR_ROTATION|CASH_MANAGEMENT|)$",
+        description="Source of alpha for this decision",
     )
 
 
@@ -44,8 +51,11 @@ ScreeningResult.model_rebuild()
 
 class AnalysisResult(BaseModel):
     """Result from intraday analysis."""
+    model_config = {"arbitrary_types_allowed": True}
+
     decisions: list[StockDecision] = []
     market_context: str = ""
+    tool_audit: Any = Field(default=None, exclude=True)
 
 
 class WeeklyReview(BaseModel):
@@ -73,3 +83,5 @@ class MonthlyReview(BaseModel):
     risk_assessment: str
     recommended_changes: list[str] = []
     journal_entries: list[JournalEntry] = []
+    currency_recommendation: str = ""  # STAY_USD, INCREASE_CHF, HEDGE
+    currency_reasoning: str = ""

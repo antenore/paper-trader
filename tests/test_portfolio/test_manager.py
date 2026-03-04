@@ -119,6 +119,58 @@ async def test_buy_uses_settings_initial_cash(db):
 
 
 @pytest.mark.asyncio
+async def test_buy_usd_with_fx(db_with_portfolio):
+    """BUY a USD stock with FX conversion — cost should be price * shares * rate."""
+    result = await execute_buy(db_with_portfolio, "AAPL", 1.0, 100.0, usd_chf_rate=0.88)
+    assert result["ok"]
+    # Cost in CHF should be 100 * 0.88 = 88
+    assert abs(result["total"] - 88.0) < 0.1
+
+    p = await queries.get_portfolio(db_with_portfolio)
+    assert abs(p["cash"] - 712.0) < 0.1  # 800 - 88
+
+
+@pytest.mark.asyncio
+async def test_buy_chf_stock(db_with_portfolio):
+    """BUY a Swiss .SW stock — no FX conversion, cost equals price * shares."""
+    result = await execute_buy(db_with_portfolio, "NESN.SW", 1.0, 100.0, usd_chf_rate=0.88)
+    assert result["ok"]
+    # CHF stock: cost should be 100 CHF (no conversion)
+    assert abs(result["total"] - 100.0) < 0.1
+
+    p = await queries.get_portfolio(db_with_portfolio)
+    assert abs(p["cash"] - 700.0) < 0.1
+
+    # Check currency stored in position
+    pos = await queries.get_position_by_symbol(db_with_portfolio, "NESN.SW")
+    assert pos["currency"] == "CHF"
+
+
+@pytest.mark.asyncio
+async def test_sell_usd_with_fx(db_with_portfolio):
+    """SELL a USD stock — proceeds should be FX-converted to CHF."""
+    await execute_buy(db_with_portfolio, "AAPL", 2.0, 100.0, usd_chf_rate=0.88)
+    result = await execute_sell(db_with_portfolio, "AAPL", 2.0, 110.0, usd_chf_rate=0.88)
+    assert result["ok"]
+    # Proceeds: 2 * 110 * 0.88 = 193.6 CHF
+    assert abs(result["total"] - 193.6) < 0.1
+
+
+@pytest.mark.asyncio
+async def test_portfolio_value_with_fx(db_with_portfolio):
+    """Portfolio value should convert USD positions to CHF."""
+    await execute_buy(db_with_portfolio, "AAPL", 2.0, 100.0, usd_chf_rate=0.88)
+    prices = {"AAPL": 110.0}
+    val = await get_portfolio_value(db_with_portfolio, prices, usd_chf_rate=0.88)
+    # positions_value = 2 * 110 * 0.88 = 193.6 CHF
+    assert abs(val["positions_value"] - 193.6) < 0.1
+    # cash = 800 - 2*100*0.88 = 800 - 176 = 624
+    assert abs(val["cash"] - 624.0) < 0.1
+    # total = 624 + 193.6 = 817.6
+    assert abs(val["total_value"] - 817.6) < 0.1
+
+
+@pytest.mark.asyncio
 async def test_trades_recorded(db_with_portfolio):
     await execute_buy(db_with_portfolio, "AAPL", 1.0, 100.0)
     await execute_sell(db_with_portfolio, "AAPL", 1.0, 110.0)

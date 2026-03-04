@@ -58,12 +58,22 @@ SECTOR_MAP: dict[str, str] = {
     "AMT": "Real Estate", "PLD": "Real Estate", "CCI": "Real Estate",
     # Materials
     "LIN": "Materials", "APD": "Materials", "SHW": "Materials",
+    # Commodities / Safe-Haven
+    "GLD": "Commodities", "SLV": "Commodities", "GDX": "Commodities",
+    "USO": "Commodities", "TLT": "Treasuries", "IEF": "Treasuries",
     # ETFs
     "SPY": "ETF", "QQQ": "ETF", "XLK": "ETF", "XLE": "ETF",
     "XLF": "ETF", "XLV": "ETF", "XLI": "ETF", "XLP": "ETF",
     "XLY": "ETF", "XLU": "ETF", "XLRE": "ETF", "XLB": "ETF",
     "XLC": "ETF", "IWM": "ETF", "DIA": "ETF", "VOO": "ETF",
     "VTI": "ETF", "ARKK": "ETF", "SOXX": "ETF", "SMH": "ETF",
+    # Swiss SIX (.SW suffix — priced in CHF)
+    "NESN.SW": "Consumer Staples", "NOVN.SW": "Healthcare",
+    "ROG.SW": "Healthcare", "UBSG.SW": "Financials",
+    "ABBN.SW": "Industrials", "SREN.SW": "Financials",
+    "ZURN.SW": "Financials", "GIVN.SW": "Consumer Staples",
+    "SIKA.SW": "Materials", "LONN.SW": "Healthcare",
+    "HOLN.SW": "Materials", "PGHN.SW": "Financials",
 }
 
 ETF_COMPONENTS: dict[str, list[str]] = {
@@ -113,13 +123,17 @@ def check_sector_cap(
     prices: dict[str, float],
     cap_pct: float | None = None,
     portfolio_value: float | None = None,
+    usd_chf_rate: float = 1.0,
 ) -> dict[str, Any]:
     """RULE 004: Check if buying would breach sector cap.
 
     ETFs and Unknown sectors are exempt.
-    portfolio_value: total portfolio value (cash + positions). If None, computed from positions + buy.
+    buy_value: cost in CHF.
+    portfolio_value: total portfolio value in CHF (cash + positions). If None, computed from positions + buy.
     Returns {"ok": True} or {"ok": False, "reason": "..."}.
     """
+    from paper_trader.portfolio.currency import symbol_currency, to_chf
+
     if cap_pct is None:
         cap_pct = settings.sector_cap_pct
 
@@ -127,13 +141,14 @@ def check_sector_cap(
     if sector in ("ETF", "Unknown"):
         return {"ok": True}
 
-    # Compute total portfolio value and sector value
+    # Compute total portfolio value and sector value (all in CHF)
     positions_value = 0.0
-    sector_value = buy_value  # Start with the proposed purchase
+    sector_value = buy_value  # Already in CHF from caller
 
     for pos in positions:
         price = prices.get(pos["symbol"], pos["avg_cost"])
-        pos_value = pos["shares"] * price
+        currency = pos.get("currency") or symbol_currency(pos["symbol"])
+        pos_value = to_chf(pos["shares"] * price, currency, usd_chf_rate)
         positions_value += pos_value
         if get_sector(pos["symbol"]) == sector:
             sector_value += pos_value

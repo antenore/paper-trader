@@ -82,3 +82,21 @@ class TestMonthlyReview:
             recommended_changes=["Increase position sizes"],
         )
         assert len(r.recommended_changes) == 1
+
+    def test_with_currency_fields(self):
+        r = MonthlyReview(
+            strategic_summary="On track",
+            risk_assessment="Low risk",
+            currency_recommendation="STAY_USD",
+            currency_reasoning="USD expected to strengthen",
+        )
+        assert r.currency_recommendation == "STAY_USD"
+        assert r.currency_reasoning == "USD expected to strengthen"
+
+    def test_currency_fields_optional(self):
+        r = MonthlyReview(
+            strategic_summary="On track",
+            risk_assessment="Low risk",
+        )
+        assert r.currency_recommendation == ""
+        assert r.currency_reasoning == ""

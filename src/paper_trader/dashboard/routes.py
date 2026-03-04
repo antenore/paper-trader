@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -17,6 +18,7 @@ from paper_trader.dashboard.csrf import csrf_token
 from paper_trader.db.connection import get_db
 from paper_trader.db import queries
 from paper_trader.market.prices import LiveDataProvider
+from paper_trader.portfolio.currency import symbol_currency
 from paper_trader.portfolio.tools import get_sector, get_sector_exposure
 from paper_trader.scheduler.jobs import (
     get_current_schedule,
@@ -47,14 +49,36 @@ def _ctx(request: Request, extra: dict[str, Any] | None = None) -> dict[str, Any
     return ctx
 
 
+_RANGE_MAP = {
+    "1d": timedelta(days=1),
+    "5d": timedelta(days=5),
+    "1m": timedelta(days=30),
+    "3m": timedelta(days=90),
+}
+
+
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     db = await get_db()
     portfolio = await queries.get_portfolio(db)
     positions = await queries.get_open_positions(db)
-    snapshots = await queries.get_snapshots(db, limit=90)
+
+    # Time range selector
+    active_range = request.query_params.get("range", "3m")
+    if active_range not in ("1d", "5d", "1m", "3m", "all"):
+        active_range = "3m"
+
+    if active_range == "all":
+        snapshots = await queries.get_snapshots(db, limit=999_999)
+    elif active_range in _RANGE_MAP:
+        since = datetime.now(timezone.utc) - _RANGE_MAP[active_range]
+        snapshots = await queries.get_snapshots(db, since=since)
+    else:
+        snapshots = await queries.get_snapshots(db, limit=90)
+
+    watchlist = await queries.get_watchlist(db)
     decisions = await queries.get_decisions(db, limit=5)
-    monthly_spend = await queries.get_monthly_spend(db, include_dry_run=False)
+    total_spend = await queries.get_total_spend(db, include_dry_run=False)
     mode = await queries.get_setting(db, "mode") or "live"
     api_paused = await queries.get_setting(db, "api_paused") == "true"
     pause_reason = await queries.get_setting(db, "pause_reason") or ""
@@ -69,32 +93,54 @@ async def index(request: Request):
             prices = await market.get_current_prices(symbols)
         except Exception:
             logger.debug("Failed to fetch live prices for dashboard")
+    # FX rate: get from latest snapshot or live
+    usd_chf_rate: float | None = None
+    try:
+        latest_snaps = await queries.get_snapshots(db, limit=1)
+        if latest_snaps and latest_snaps[0].get("usd_chf_rate"):
+            usd_chf_rate = latest_snaps[0]["usd_chf_rate"]
+        else:
+            market = LiveDataProvider()
+            fx_prices = await market.get_current_prices([settings.fx_pair])
+            usd_chf_rate = fx_prices.get(settings.fx_pair)
+    except Exception:
+        logger.debug("FX rate unavailable for dashboard")
+
+    fx = usd_chf_rate or 1.0
+
     for p in positions:
         current_price = prices.get(p["symbol"], p["avg_cost"])
         pnl_pct = (current_price / p["avg_cost"] - 1) * 100 if p["avg_cost"] > 0 else 0
         stop = p.get("stop_loss_price")
         stop_dist = ((current_price - stop) / current_price * 100) if stop and current_price > 0 else None
+        currency = p.get("currency") or symbol_currency(p["symbol"])
         enriched_positions.append({
             **p,
             "sector": get_sector(p["symbol"]),
             "current_price": current_price,
+            "currency": currency,
             "pnl_pct": pnl_pct,
             "stop_distance_pct": stop_dist,
         })
 
-    # Total portfolio value = cash + market value of all positions
-    positions_value = sum(
-        prices.get(p["symbol"], p["avg_cost"]) * p["shares"]
+    # Total portfolio value = cash + FX-converted market value of all positions
+    from paper_trader.portfolio.currency import to_chf
+    positions_value_chf = sum(
+        to_chf(prices.get(p["symbol"], p["avg_cost"]) * p["shares"],
+               p.get("currency") or symbol_currency(p["symbol"]), fx)
         for p in positions
     ) if positions else 0.0
-    total_value = (portfolio["cash"] if portfolio else 0.0) + positions_value
+    total_value = (portfolio["cash"] if portfolio else 0.0) + positions_value_chf
+
+    # For the template: total_value_chf is the FX-adjusted total (only meaningful when we have a real rate)
+    total_value_chf = total_value if usd_chf_rate else None
 
     # Sector exposure for doughnut chart
     sector_exposure = get_sector_exposure(positions, prices) if positions else {}
 
     # Equity curve data (reversed for chronological order)
     snapshots_chrono = list(reversed(snapshots))
-    equity_dates = [s["snapshot_at"][:10] for s in snapshots_chrono]
+    equity_dates = [s["snapshot_at"][:16] for s in snapshots_chrono]
     equity_values = [s["total_value"] for s in snapshots_chrono]
     benchmark_values = [s.get("benchmark_value") for s in snapshots_chrono]
     # Only pass benchmark if at least one non-None value exists
@@ -105,7 +151,8 @@ async def index(request: Request):
         "positions": enriched_positions,
         "snapshots": snapshots,
         "decisions": decisions,
-        "monthly_spend": monthly_spend,
+        "total_spend": total_spend,
+        "account_balance": settings.api_account_balance_usd,
         "budget_warn": settings.budget_warn_usd,
         "budget_limit": settings.budget_hard_stop_usd,
         "mode": mode,
@@ -115,7 +162,13 @@ async def index(request: Request):
         "equity_values": equity_values,
         "benchmark_values": benchmark_values if has_benchmark else [],
         "total_value": total_value,
+        "usd_chf_rate": usd_chf_rate,
+        "total_value_chf": total_value_chf,
+        "positions_value_chf": positions_value_chf,
         "sector_exposure": sector_exposure,
+        "initial_cash": settings.initial_cash_chf,
+        "active_range": active_range,
+        "watchlist": watchlist,
     }))
 
 
@@ -154,11 +207,12 @@ async def api_usage_page(request: Request):
     db = await get_db()
     by_model = await queries.get_api_usage_by_model(db, include_dry_run=False)
     daily = await queries.get_daily_spend(db, days=30, include_dry_run=False)
-    monthly_spend = await queries.get_monthly_spend(db, include_dry_run=False)
+    total_spend = await queries.get_total_spend(db, include_dry_run=False)
     return templates.TemplateResponse(request, "api_usage.html", {
         "by_model": by_model,
         "daily": daily,
-        "monthly_spend": monthly_spend,
+        "total_spend": total_spend,
+        "account_balance": settings.api_account_balance_usd,
         "budget_warn": settings.budget_warn_usd,
         "budget_limit": settings.budget_hard_stop_usd,
     })
@@ -172,6 +226,37 @@ async def dry_run_page(request: Request):
         "sessions": sessions,
         "default_symbols": settings.default_watchlist,
     }))
+
+
+@router.post("/watchlist/add")
+async def add_to_watchlist(request: Request):
+    """Manually add a symbol to the watchlist."""
+    form = await request.form()
+    if not form and hasattr(request.state, "_csrf_form"):
+        form = request.state._csrf_form
+    symbol = (form.get("symbol") or "").strip().upper()
+    risk_tier = form.get("risk_tier", "growth")
+    if not symbol:
+        return RedirectResponse(url="/", status_code=303)
+    db = await get_db()
+    await queries.add_to_watchlist(db, symbol, reason="Manual add", risk_tier=risk_tier)
+    logger.info("Manually added %s [%s] to watchlist", symbol, risk_tier)
+    return RedirectResponse(url="/", status_code=303)
+
+
+@router.post("/watchlist/remove")
+async def remove_from_watchlist(request: Request):
+    """Manually remove a symbol from the watchlist."""
+    form = await request.form()
+    if not form and hasattr(request.state, "_csrf_form"):
+        form = request.state._csrf_form
+    symbol = (form.get("symbol") or "").strip().upper()
+    if not symbol:
+        return RedirectResponse(url="/", status_code=303)
+    db = await get_db()
+    await queries.remove_from_watchlist(db, symbol)
+    logger.info("Manually removed %s from watchlist", symbol)
+    return RedirectResponse(url="/", status_code=303)
 
 
 @router.post("/resume-trading")
@@ -234,14 +319,22 @@ async def settings_page(request: Request):
 @router.post("/settings/config")
 async def save_config(request: Request):
     db = await get_db()
+    # BaseHTTPMiddleware consumes the body stream — use the cached form
+    # from CSRF middleware if request.form() returns empty.
     form = await request.form()
+    if not form and hasattr(request.state, "_csrf_form"):
+        form = request.state._csrf_form
 
     for db_key in CONFIG_KEYS:
-        value = form.get(db_key)
-        if value is not None:
-            ok = await save_config_to_db(db, db_key, str(value))
-            if not ok:
-                return RedirectResponse(url="/settings?saved=error", status_code=303)
+        # For checkboxes: hidden input sends "false", checkbox sends "true".
+        # When both are present, take the last value (the checkbox wins).
+        values = form.getlist(db_key)
+        if not values:
+            continue
+        value = values[-1]
+        ok = await save_config_to_db(db, db_key, str(value))
+        if not ok:
+            return RedirectResponse(url="/settings?saved=error", status_code=303)
 
     return RedirectResponse(url="/settings?saved=config", status_code=303)
 
@@ -250,6 +343,8 @@ async def save_config(request: Request):
 async def save_schedule(request: Request):
     db = await get_db()
     form = await request.form()
+    if not form and hasattr(request.state, "_csrf_form"):
+        form = request.state._csrf_form
 
     for _, default_cron, job_id, _ in SCHEDULE:
         hour = form.get(f"{job_id}.hour")

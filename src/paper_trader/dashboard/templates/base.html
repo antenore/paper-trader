@@ -252,9 +252,199 @@
         }
         .btn-inline { margin-left: 1rem; padding: 0.3rem 0.8rem; }
 
+        /* ── Market Ticker Bar ────────────────────────────────────── */
+        .market-ticker {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 0.85rem;
+            margin-bottom: 1.5rem;
+            background: linear-gradient(135deg, var(--pt-surface) 0%, rgba(26, 31, 46, 0.6) 100%);
+            border: 1px solid var(--pt-border-subtle);
+            border-radius: 8px;
+            font-family: 'DM Mono', monospace;
+            overflow-x: auto;
+        }
+        .market-ticker__clocks {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+        .market-ticker__clock {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            white-space: nowrap;
+        }
+        .market-ticker__tz {
+            font-size: 0.65rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--pt-text-muted);
+            min-width: 2.6rem;
+        }
+        .market-ticker__time {
+            font-size: 0.9rem;
+            font-variant-numeric: tabular-nums;
+            color: var(--pt-text-bright);
+            letter-spacing: 0.04em;
+        }
+        .market-ticker__sep {
+            width: 1px;
+            height: 1.1rem;
+            background: var(--pt-border);
+            flex-shrink: 0;
+        }
+        .market-ticker__status {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.65rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--pt-text-muted);
+            white-space: nowrap;
+        }
+        .market-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--pt-negative);
+            flex-shrink: 0;
+            box-shadow: 0 0 6px rgba(248, 81, 73, 0.4);
+            transition: background 0.3s, box-shadow 0.3s;
+        }
+        .market-dot.open {
+            background: var(--pt-positive);
+            box-shadow: 0 0 6px rgba(63, 185, 80, 0.5);
+            animation: pulse-dot 2s ease-in-out infinite;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { box-shadow: 0 0 6px rgba(63, 185, 80, 0.5); }
+            50% { box-shadow: 0 0 12px rgba(63, 185, 80, 0.8); }
+        }
+
+        /* ── Fortune Hero Card ───────────────────────────────────── */
+        .stat-card--hero {
+            border-color: rgba(226, 169, 59, 0.25);
+            background: linear-gradient(135deg, var(--pt-surface) 0%, rgba(226, 169, 59, 0.04) 100%);
+            position: relative;
+        }
+        .stat-card--hero::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 3px;
+            border-radius: 10px 0 0 10px;
+            background: var(--pt-accent);
+        }
+        .fortune-pnl {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.7rem;
+            font-weight: 500;
+            margin-top: 0.15rem;
+            letter-spacing: 0.02em;
+        }
+
+        /* ── Chart Header ────────────────────────────────────────── */
+        .chart-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+        .chart-header h3 { margin-bottom: 0; }
+
+        /* ── Time Scale Tabs ─────────────────────────────────────── */
+        .scale-tabs {
+            display: flex;
+            gap: 0.15rem;
+            padding: 0;
+            margin: 0;
+            list-style: none;
+        }
+        .scale-tab {
+            padding: 0.25rem 0.55rem;
+            font-family: 'DM Mono', monospace;
+            font-size: 0.68rem;
+            font-weight: 500;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--pt-text-muted);
+            text-decoration: none;
+            border-radius: 4px;
+            transition: color 0.15s, background 0.15s;
+            cursor: pointer;
+        }
+        .scale-tab:hover {
+            color: var(--pt-text);
+            background: var(--pt-surface-hover);
+        }
+        .scale-tab.active {
+            color: var(--pt-accent);
+            background: var(--pt-accent-dim);
+        }
+
+        /* ── Custom Chart Legend ──────────────────────────────────── */
+        .chart-legend {
+            display: flex;
+            gap: 1.25rem;
+            padding: 0.6rem 0 0;
+            justify-content: center;
+        }
+        .chart-legend__item {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-family: 'DM Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--pt-text-muted);
+            letter-spacing: 0.02em;
+        }
+        .chart-legend__swatch {
+            width: 14px;
+            height: 3px;
+            border-radius: 1px;
+            flex-shrink: 0;
+        }
+        .chart-legend__swatch--dashed {
+            background: repeating-linear-gradient(
+                90deg,
+                currentColor 0, currentColor 4px,
+                transparent 4px, transparent 7px
+            );
+            height: 2px;
+        }
+        .chart-legend__swatch--break {
+            background: repeating-linear-gradient(
+                90deg,
+                currentColor 0, currentColor 3px,
+                transparent 3px, transparent 6px
+            );
+            height: 1px;
+        }
+
         /* ── Charts ───────────────────────────────────────────────── */
         .chart-sm { max-width: 400px; margin: auto; }
         #equity-chart { max-height: 300px; }
+
+        /* ── Settings: switch fieldsets ──────────────────────────── */
+        article fieldset {
+            border: none;
+            padding: 0;
+            margin-bottom: 0.75rem;
+        }
+        article fieldset > small {
+            display: block;
+            margin-top: -0.25rem;
+            margin-left: 3.75rem;
+            color: var(--pt-text-muted);
+            font-size: 0.8rem;
+        }
 
         /* ── Schedule inputs ──────────────────────────────────────── */
         .schedule-hour { width: 5rem; }
@@ -323,6 +513,8 @@
         main > *:nth-child(4) { animation-delay: 0.12s; }
         main > *:nth-child(5) { animation-delay: 0.16s; }
         main > *:nth-child(6) { animation-delay: 0.20s; }
+        main > *:nth-child(7) { animation-delay: 0.24s; }
+        main > *:nth-child(8) { animation-delay: 0.28s; }
     </style>
 </head>
 <body>

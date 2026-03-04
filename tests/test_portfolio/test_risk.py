@@ -129,6 +129,33 @@ class TestSectorCap:
         assert result["ok"]
 
 
+class TestFxRate:
+    def test_risk_check_with_fx_rate(self):
+        """Risk checks should use FX-converted values."""
+        # With rate=0.88, buying 1 share at $200 costs 176 CHF
+        # 800 cash, position limit growth=25% of 800=200 CHF → 176 < 200 → ok
+        result = check_risk("BUY", "AAPL", 1, 200, 800.0, [], 800, usd_chf_rate=0.88)
+        assert result["ok"]
+
+    def test_risk_check_fx_reduces_cost(self):
+        """With FX, more shares fit within limits."""
+        # Without FX (rate=1.0): 1 share at $300 = 300 CHF > 25% of 800 = 200 → reduce
+        result_no_fx = check_risk("BUY", "AAPL", 1, 300, 800.0, [], 800, usd_chf_rate=1.0)
+        # With FX (rate=0.88): 1 share at $300 = 264 CHF > 200 → reduce
+        result_fx = check_risk("BUY", "AAPL", 1, 300, 800.0, [], 800, usd_chf_rate=0.88)
+        # FX version should allow more shares (264 < 300)
+        assert result_fx["ok"]
+        assert result_no_fx["ok"]
+        assert result_fx["adjusted_shares"] > result_no_fx["adjusted_shares"]
+
+    def test_chf_stock_no_conversion(self):
+        """Swiss .SW stocks should not be FX-converted."""
+        # NESN.SW is CHF — rate doesn't matter
+        result = check_risk("BUY", "NESN.SW", 1, 100, 800.0, [], 800, usd_chf_rate=0.50)
+        assert result["ok"]
+        # Cost = 100 CHF (no conversion), which is < 25% of 800 = 200
+
+
 class TestEdgeCases:
     def test_very_small_trade_rejected(self):
         # After adjustments, if trade < 0.01 shares → reject

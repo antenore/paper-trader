@@ -100,6 +100,19 @@ TABLES = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS news_items (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        source       TEXT    NOT NULL,
+        symbol       TEXT,
+        title        TEXT    NOT NULL,
+        summary      TEXT,
+        link         TEXT    NOT NULL,
+        published_at TEXT,
+        fetched_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(link)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS dry_run_sessions (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         started_at  TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -124,6 +137,9 @@ MIGRATIONS = [
     ("positions", "stop_loss_price", "REAL"),
     ("watchlist", "risk_tier", "TEXT DEFAULT 'growth'"),
     ("positions", "risk_tier", "TEXT DEFAULT 'growth'"),
+    ("decisions", "alpha_source", "TEXT DEFAULT ''"),
+    ("portfolio_snapshots", "usd_chf_rate", "REAL"),
+    ("positions", "currency", "TEXT DEFAULT 'USD'"),
 ]
 
 

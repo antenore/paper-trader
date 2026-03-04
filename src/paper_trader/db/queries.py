@@ -84,10 +84,11 @@ async def open_position(
     is_dry_run: bool = False,
     stop_loss_price: float | None = None,
     risk_tier: str = "growth",
+    currency: str = "USD",
 ) -> int:
     cursor = await db.execute(
-        "INSERT INTO positions (symbol, shares, avg_cost, is_dry_run, stop_loss_price, risk_tier) VALUES (?, ?, ?, ?, ?, ?)",
-        (symbol, shares, avg_cost, int(is_dry_run), stop_loss_price, risk_tier),
+        "INSERT INTO positions (symbol, shares, avg_cost, is_dry_run, stop_loss_price, risk_tier, currency) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (symbol, shares, avg_cost, int(is_dry_run), stop_loss_price, risk_tier, currency),
     )
     await db.commit()
     return cursor.lastrowid  # type: ignore[return-value]
@@ -164,11 +165,12 @@ async def record_decision(
     reasoning: str,
     model: str,
     is_dry_run: bool = False,
+    alpha_source: str = "",
 ) -> int:
     cursor = await db.execute(
-        """INSERT INTO decisions (symbol, action, confidence, reasoning, model, is_dry_run)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (symbol, action, confidence, reasoning, model, int(is_dry_run)),
+        """INSERT INTO decisions (symbol, action, confidence, reasoning, model, is_dry_run, alpha_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (symbol, action, confidence, reasoning, model, int(is_dry_run), alpha_source),
     )
     await db.commit()
     return cursor.lastrowid  # type: ignore[return-value]
@@ -215,8 +217,21 @@ async def record_api_call(
     return cursor.lastrowid  # type: ignore[return-value]
 
 
+async def get_total_spend(db: aiosqlite.Connection, include_dry_run: bool = True) -> float:
+    """Get total API spend across all time (matches the Anthropic account credit model)."""
+    if include_dry_run:
+        rows = await db.execute_fetchall(
+            "SELECT COALESCE(SUM(cost_usd), 0) as total FROM api_calls",
+        )
+    else:
+        rows = await db.execute_fetchall(
+            "SELECT COALESCE(SUM(cost_usd), 0) as total FROM api_calls WHERE is_dry_run = 0",
+        )
+    return rows[0]["total"]
+
+
 async def get_monthly_spend(db: aiosqlite.Connection, include_dry_run: bool = True) -> float:
-    """Get total API spend for the current month."""
+    """Get total API spend for the current month (informational only — budget uses total spend)."""
     if include_dry_run:
         rows = await db.execute_fetchall(
             """SELECT COALESCE(SUM(cost_usd), 0) as total
@@ -236,7 +251,7 @@ async def get_monthly_spend(db: aiosqlite.Connection, include_dry_run: bool = Tr
 async def get_api_usage_by_model(
     db: aiosqlite.Connection, include_dry_run: bool = True
 ) -> list[dict[str, Any]]:
-    """Get API usage breakdown by model for current month."""
+    """Get all-time API usage breakdown by model."""
     if include_dry_run:
         rows = await db.execute_fetchall(
             """SELECT model,
@@ -245,7 +260,6 @@ async def get_api_usage_by_model(
                       SUM(output_tokens) as total_output,
                       SUM(cost_usd) as total_cost
                FROM api_calls
-               WHERE called_at >= date('now', 'start of month')
                GROUP BY model
                ORDER BY total_cost DESC""",
         )
@@ -257,8 +271,7 @@ async def get_api_usage_by_model(
                       SUM(output_tokens) as total_output,
                       SUM(cost_usd) as total_cost
                FROM api_calls
-               WHERE called_at >= date('now', 'start of month')
-                 AND is_dry_run = 0
+               WHERE is_dry_run = 0
                GROUP BY model
                ORDER BY total_cost DESC""",
         )
@@ -304,26 +317,38 @@ async def record_snapshot(
     is_dry_run: bool = False,
     spy_price: float | None = None,
     benchmark_value: float | None = None,
+    usd_chf_rate: float | None = None,
 ) -> int:
     total = cash + positions_value
     cursor = await db.execute(
-        """INSERT INTO portfolio_snapshots (cash, positions_value, total_value, is_dry_run, spy_price, benchmark_value)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (cash, positions_value, total, int(is_dry_run), spy_price, benchmark_value),
+        """INSERT INTO portfolio_snapshots (cash, positions_value, total_value, is_dry_run, spy_price, benchmark_value, usd_chf_rate)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (cash, positions_value, total, int(is_dry_run), spy_price, benchmark_value, usd_chf_rate),
     )
     await db.commit()
     return cursor.lastrowid  # type: ignore[return-value]
 
 
 async def get_snapshots(
-    db: aiosqlite.Connection, is_dry_run: bool = False, limit: int = 90
+    db: aiosqlite.Connection,
+    is_dry_run: bool = False,
+    limit: int = 90,
+    since: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    rows = await db.execute_fetchall(
-        """SELECT * FROM portfolio_snapshots
-           WHERE is_dry_run = ?
-           ORDER BY snapshot_at DESC LIMIT ?""",
-        (int(is_dry_run), limit),
-    )
+    if since is not None:
+        rows = await db.execute_fetchall(
+            """SELECT * FROM portfolio_snapshots
+               WHERE is_dry_run = ? AND snapshot_at >= ?
+               ORDER BY snapshot_at DESC""",
+            (int(is_dry_run), since.isoformat()),
+        )
+    else:
+        rows = await db.execute_fetchall(
+            """SELECT * FROM portfolio_snapshots
+               WHERE is_dry_run = ?
+               ORDER BY snapshot_at DESC LIMIT ?""",
+            (int(is_dry_run), limit),
+        )
     return [dict(r) for r in rows]
 
 
@@ -338,14 +363,36 @@ async def get_first_spy_price(db: aiosqlite.Connection, is_dry_run: bool = False
     return rows[0]["spy_price"] if rows else None
 
 
+async def get_first_fx_rate(db: aiosqlite.Connection, is_dry_run: bool = False) -> float | None:
+    """Return the earliest non-NULL usd_chf_rate for the given run mode."""
+    rows = await db.execute_fetchall(
+        """SELECT usd_chf_rate FROM portfolio_snapshots
+           WHERE is_dry_run = ? AND usd_chf_rate IS NOT NULL
+           ORDER BY snapshot_at ASC LIMIT 1""",
+        (int(is_dry_run),),
+    )
+    return rows[0]["usd_chf_rate"] if rows else None
+
+
+async def get_latest_fx_rate(db: aiosqlite.Connection, is_dry_run: bool = False) -> float | None:
+    """Return the most recent non-NULL usd_chf_rate from snapshots."""
+    rows = await db.execute_fetchall(
+        """SELECT usd_chf_rate FROM portfolio_snapshots
+           WHERE is_dry_run = ? AND usd_chf_rate IS NOT NULL
+           ORDER BY snapshot_at DESC LIMIT 1""",
+        (int(is_dry_run),),
+    )
+    return rows[0]["usd_chf_rate"] if rows else None
+
+
 async def get_benchmark_summary(db: aiosqlite.Connection, is_dry_run: bool = False) -> dict[str, Any] | None:
     """Return benchmark comparison data for AI reviews.
 
-    Returns dict with initial/current SPY price, returns, and portfolio value,
-    or None if no benchmark data exists yet.
+    Returns dict with initial/current SPY price, returns, portfolio value,
+    and FX (USD/CHF) data when available. Returns None if no benchmark data exists yet.
     """
     first = await db.execute_fetchall(
-        """SELECT spy_price, benchmark_value, total_value FROM portfolio_snapshots
+        """SELECT spy_price, benchmark_value, total_value, usd_chf_rate FROM portfolio_snapshots
            WHERE is_dry_run = ? AND spy_price IS NOT NULL
            ORDER BY snapshot_at ASC LIMIT 1""",
         (int(is_dry_run),),
@@ -354,7 +401,7 @@ async def get_benchmark_summary(db: aiosqlite.Connection, is_dry_run: bool = Fal
         return None
 
     latest = await db.execute_fetchall(
-        """SELECT spy_price, benchmark_value, total_value FROM portfolio_snapshots
+        """SELECT spy_price, benchmark_value, total_value, usd_chf_rate FROM portfolio_snapshots
            WHERE is_dry_run = ? AND spy_price IS NOT NULL
            ORDER BY snapshot_at DESC LIMIT 1""",
         (int(is_dry_run),),
@@ -369,7 +416,7 @@ async def get_benchmark_summary(db: aiosqlite.Connection, is_dry_run: bool = Fal
     current_value = latest[0]["total_value"]
     portfolio_return_pct = ((current_value / initial_value) - 1) * 100 if initial_value else 0
 
-    return {
+    result: dict[str, Any] = {
         "initial_spy": initial_spy,
         "current_spy": current_spy,
         "spy_return_pct": spy_return_pct,
@@ -378,6 +425,33 @@ async def get_benchmark_summary(db: aiosqlite.Connection, is_dry_run: bool = Fal
         "portfolio_return_pct": portfolio_return_pct,
         "alpha_pct": portfolio_return_pct - spy_return_pct,
     }
+
+    # FX data (USD/CHF) — include when available
+    initial_fx = first[0]["usd_chf_rate"]
+    current_fx = latest[0]["usd_chf_rate"]
+    if initial_fx and current_fx:
+        fx_change_pct = ((current_fx / initial_fx) - 1) * 100
+        # Benchmark adjusted for FX: what SPY buy-and-hold returns in CHF
+        benchmark_value_chf = initial_value * (current_spy / initial_spy) * (current_fx / initial_fx) if initial_spy else 0
+        # Portfolio in CHF: cash is already CHF, positions are USD * fx_rate
+        # (positions_value from latest snapshot is in the same mixed unit as total_value)
+        portfolio_value_chf = current_value  # already mixed CHF+USD, best approximation
+        # FX impact: difference between USD-denominated and CHF-adjusted alpha
+        usd_alpha = portfolio_return_pct - spy_return_pct
+        chf_spy_return = ((current_spy / initial_spy) * (current_fx / initial_fx) - 1) * 100 if initial_spy else 0
+        chf_alpha = portfolio_return_pct - chf_spy_return
+        fx_impact_pct = chf_alpha - usd_alpha
+
+        result.update({
+            "initial_fx_rate": initial_fx,
+            "current_fx_rate": current_fx,
+            "fx_change_pct": fx_change_pct,
+            "benchmark_value_chf": benchmark_value_chf,
+            "portfolio_value_chf": portfolio_value_chf,
+            "fx_impact_pct": fx_impact_pct,
+        })
+
+    return result
 
 
 # ── Strategy Journal ──────────────────────────────────────────────────
@@ -550,7 +624,7 @@ async def reset_database(
     tables = [
         "portfolio_snapshots", "trades", "decisions", "api_calls",
         "strategy_journal", "dry_run_sessions", "positions", "watchlist",
-        "settings", "portfolio",
+        "news_items", "settings", "portfolio",
     ]
     for table in tables:
         await db.execute(f"DELETE FROM {table}")  # noqa: S608 — table names are hardcoded above
@@ -565,6 +639,79 @@ async def count_snapshots(db: aiosqlite.Connection, is_dry_run: bool = False) ->
         (int(is_dry_run),),
     )
     return rows[0]["cnt"]
+
+
+# ── News Items ────────────────────────────────────────────────────────
+
+async def save_news_item(
+    db: aiosqlite.Connection,
+    source: str,
+    symbol: str | None,
+    title: str,
+    summary: str | None,
+    link: str,
+    published_at: str | None,
+) -> bool:
+    """Save a news item. Returns True if inserted, False if duplicate (same link)."""
+    cursor = await db.execute(
+        """INSERT OR IGNORE INTO news_items (source, symbol, title, summary, link, published_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (source, symbol, title, summary, link, published_at),
+    )
+    await db.commit()
+    return cursor.rowcount > 0
+
+
+async def get_recent_news(
+    db: aiosqlite.Connection,
+    hours: int = 6,
+    symbols: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Get news from DB fetched within the last N hours.
+
+    If symbols given, returns general news (symbol IS NULL) plus
+    symbol-specific news matching any of the given tickers.
+    """
+    if symbols:
+        placeholders = ",".join("?" * len(symbols))
+        rows = await db.execute_fetchall(
+            f"""SELECT * FROM news_items
+               WHERE fetched_at >= datetime('now', ? || ' hours')
+                 AND (symbol IS NULL OR symbol IN ({placeholders}))
+               ORDER BY fetched_at DESC LIMIT 50""",
+            (f"-{hours}", *symbols),
+        )
+    else:
+        rows = await db.execute_fetchall(
+            """SELECT * FROM news_items
+               WHERE fetched_at >= datetime('now', ? || ' hours')
+               ORDER BY fetched_at DESC LIMIT 30""",
+            (f"-{hours}",),
+        )
+    return [dict(r) for r in rows]
+
+
+async def cleanup_old_news(db: aiosqlite.Connection, days: int = 7) -> int:
+    """Delete news items older than N days. Returns count deleted."""
+    cursor = await db.execute(
+        "DELETE FROM news_items WHERE fetched_at < datetime('now', ? || ' days')",
+        (f"-{days}",),
+    )
+    await db.commit()
+    return cursor.rowcount
+
+
+async def has_monthly_review_this_month(db: aiosqlite.Connection, is_dry_run: bool = False) -> bool:
+    """Check if a monthly_review API call has already been made this month."""
+    rows = await db.execute_fetchall(
+        """SELECT 1 FROM api_calls
+           WHERE purpose = 'monthly_review'
+             AND called_at >= date('now', 'start of month')
+             AND is_dry_run = ?
+           LIMIT 1""",
+        (int(is_dry_run),),
+    )
+    return bool(rows)
 
 
 async def close_orphaned_dry_run_sessions(db: aiosqlite.Connection) -> int:

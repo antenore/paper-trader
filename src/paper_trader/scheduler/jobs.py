@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from paper_trader.config import settings
+from paper_trader.config import settings  # noqa: E402 — used in SCHEDULE and run_job
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +29,24 @@ def is_market_open() -> bool:
 
 async def run_job(run_type: str) -> None:
     """Generic job runner for all scheduled tasks."""
-    from paper_trader.ai.client import AIClient
     from paper_trader.db.connection import get_db
-    from paper_trader.market.prices import LiveDataProvider
 
     logger.info("Running %s", run_type)
     try:
         db = await get_db()
+
+        # News fetch is independent — no AI client or market data needed
+        if run_type == "news_fetch":
+            from paper_trader.db import queries as q
+            from paper_trader.market.news import fetch_and_save_news
+            new_count = await fetch_and_save_news(db)
+            cleaned = await q.cleanup_old_news(db, days=settings.news_cleanup_days)
+            logger.info("News fetch: %d new items, %d old items cleaned up", new_count, cleaned)
+            return
+
+        from paper_trader.ai.client import AIClient
+        from paper_trader.market.prices import LiveDataProvider
+
         ai_client = AIClient(db)
         market = LiveDataProvider()
 
@@ -44,6 +55,10 @@ async def run_job(run_type: str) -> None:
             result = await run_weekly_review(db, ai_client, market)
             logger.info("Weekly review complete: %s", result.performance_summary[:100])
         elif run_type == "monthly_review":
+            from paper_trader.db import queries as q
+            if await q.has_monthly_review_this_month(db):
+                logger.info("Monthly review already ran this month, skipping duplicate")
+                return
             from paper_trader.ai.strategist import run_monthly_review
             result = await run_monthly_review(db, ai_client, market)
             logger.info("Monthly review complete: %s", result.strategic_summary[:100])
@@ -57,6 +72,9 @@ async def run_job(run_type: str) -> None:
 
 # Schedule configuration: (run_type, cron_kwargs, job_id, job_name)
 SCHEDULE = [
+    # News: runs 24/7 every N minutes — captures weekend geopolitical events
+    ("news_fetch",     dict(minute=f"*/{settings.news_fetch_interval_minutes}"),    "news_fetch",      "News Fetch"),
+    # Trading: market hours only
     ("full",           dict(day_of_week="mon-fri", hour=10, minute=0),              "morning_scan",    "Morning Scan"),
     ("quick",          dict(day_of_week="mon-fri", hour=13, minute=0),              "midday_check",    "Midday Check"),
     ("full",           dict(day_of_week="mon-fri", hour=14, minute=30),             "afternoon_scan",  "Afternoon Scan"),
