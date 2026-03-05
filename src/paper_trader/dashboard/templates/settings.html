@@ -172,6 +172,14 @@
             <input type="number" name="config.tool_use_max_turns" value="{{ config['config.tool_use_max_turns'] }}" step="1" min="1" max="10">
             <small>Max API round-trips per analysis (more turns = more accurate but higher cost)</small>
         </label>
+        <fieldset>
+            <input type="hidden" name="config.enable_code_execution" value="false">
+            <label>
+                <input type="checkbox" name="config.enable_code_execution" value="true" role="switch" {{ 'checked' if config['config.enable_code_execution'] in ['True', 'true', True] }}>
+                Enable code execution sandbox
+            </label>
+            <small>Python sandbox for quantitative analysis in weekly/monthly reviews (pandas, numpy, scipy). Free tier: 1,550 hrs/month.</small>
+        </fieldset>
         <button type="submit">Save Tool Use</button>
     </form>
 </article>

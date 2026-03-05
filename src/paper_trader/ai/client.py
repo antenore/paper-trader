@@ -31,6 +31,7 @@ class ToolUseResponse:
     total_output_tokens: int = 0
     total_cost: float = 0.0
     turns: int = 0
+    container_id: str | None = None  # Code execution container for reuse
 
 
 class AIClient:
@@ -194,7 +195,14 @@ class AIClient:
             total_output += out_tok
             total_cost += cost
 
-            # Check if Claude wants to use tools
+            # Handle pause_turn: server-side code execution paused a long turn.
+            # Send the response back as-is to let Claude continue.
+            if response.stop_reason == "pause_turn":
+                logger.info("Code execution pause_turn on turn %d, continuing...", turn + 1)
+                messages.append({"role": "assistant", "content": response.content})
+                continue
+
+            # Check if Claude wants to use client-side tools
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
 
             if response.stop_reason != "tool_use" or not tool_use_blocks:
@@ -309,6 +317,11 @@ class AIClient:
         if audit is not None:
             audit.turns = turns
 
+        # Track container ID for code execution reuse
+        container_id = None
+        if hasattr(response, "container") and response.container:
+            container_id = response.container.id
+
         return ToolUseResponse(
             data=data,
             audit=audit,
@@ -316,6 +329,7 @@ class AIClient:
             total_output_tokens=total_output,
             total_cost=total_cost,
             turns=turns,
+            container_id=container_id,
         )
 
     @staticmethod

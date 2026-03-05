@@ -191,11 +191,40 @@ You have access to calculator tools for exact arithmetic. You MUST use them — 
 7. Do NOT estimate, approximate, or calculate in your head. Always use the tools."""
 
 
-def get_analysis_system(enable_tools: bool) -> str:
+CODE_EXECUTION_INSTRUCTIONS = """
+
+## Python Sandbox (code_execution)
+You have access to a sandboxed Python environment with pandas, numpy, scipy, scikit-learn, and statsmodels.
+Use it for quantitative analysis that requires precise computation on data — do NOT do mental math on numbers.
+
+**When to use it:**
+- Correlation matrices (30+ day pairwise correlations across positions)
+- Portfolio Sharpe ratio, Sortino ratio, max drawdown
+- Rolling returns and volatility analysis
+- Regression analysis (beta to benchmark, factor exposure)
+- Win rate / expectancy calculations from trade history
+- Any computation on more than 5 data points
+
+**When NOT to use it:**
+- Simple comparisons (is A > B?)
+- Qualitative reasoning about strategy, catalysts, or macro
+- Single arithmetic operations (use calculator tools instead)
+
+**How to use it:**
+- Write concise Python scripts that print results to stdout
+- Parse CSV/tabular data passed in the prompt using pandas
+- Always print a clear summary of results at the end
+- Keep scripts focused — one computation per execution"""
+
+
+def get_analysis_system(enable_tools: bool, enable_code_execution: bool = False) -> str:
     """Return the analysis system prompt, with tool instructions appended if enabled."""
+    system = ANALYSIS_SYSTEM
     if enable_tools:
-        return ANALYSIS_SYSTEM + TOOL_USE_INSTRUCTIONS
-    return ANALYSIS_SYSTEM
+        system += TOOL_USE_INSTRUCTIONS
+    if enable_code_execution:
+        system += CODE_EXECUTION_INSTRUCTIONS
+    return system
 
 
 WEEKLY_REVIEW_SYSTEM = """You are a weekly trading strategist reviewing a training portfolio preparing for real deployment (1000 CHF).
@@ -220,12 +249,56 @@ You must respond with valid JSON matching this schema:
 }"""
 
 
+WEEKLY_CODE_EXECUTION_INSTRUCTIONS = """
+
+## Python Sandbox (code_execution)
+You have a sandboxed Python environment with pandas, numpy, scipy, scikit-learn, statsmodels.
+USE IT for quantitative analysis on the data provided below. Do NOT estimate — compute precisely.
+
+**Mandatory computations (when sufficient data is available):**
+1. Parse the trades data and compute: win rate, average win/loss, expectancy per trade
+2. If snapshot data is provided: compute weekly Sharpe ratio, max drawdown, volatility
+3. Correlation analysis: if multiple positions were held, compute pairwise return correlations
+4. Identify the best and worst decisions by P&L impact
+
+**How to use:**
+- Write a Python script that processes the data from the prompt
+- Print clear results that you then reference in your analysis
+- Use pandas for data manipulation, scipy.stats for statistical tests"""
+
+
+MONTHLY_CODE_EXECUTION_INSTRUCTIONS = """
+
+## Python Sandbox (code_execution)
+You have a sandboxed Python environment with pandas, numpy, scipy, scikit-learn, statsmodels.
+USE IT for deep quantitative analysis. This is the monthly review — be thorough.
+
+**Mandatory computations (when sufficient data is available):**
+1. Monthly Sharpe ratio, Sortino ratio, max drawdown from snapshot history
+2. Rolling 7-day volatility trend
+3. Alpha/beta regression vs benchmark (portfolio returns ~ benchmark returns)
+4. Trade analysis: win rate, average holding period, best/worst trades, expectancy
+5. Currency impact quantification: decompose returns into asset returns + FX returns
+6. If enough history: equity curve analysis — is the strategy improving over time?
+
+**Optional (if data supports it):**
+- Monte Carlo simulation: bootstrap trade returns to estimate confidence intervals
+- Sector contribution analysis: which sectors drove returns?
+- Risk-adjusted metrics: information ratio, Calmar ratio
+
+**How to use:**
+- Write Python scripts that process the data from the prompt
+- Print clear, structured results
+- Reference computed numbers in your strategic analysis"""
+
+
 def weekly_review_prompt(
     portfolio_summary: str,
     trades_this_week: str,
     decisions_this_week: str,
     current_journal: str,
     benchmark_comparison: str = "",
+    snapshot_csv: str = "",
 ) -> str:
     prompt = f"""Review this week's trading performance and update strategy.
 
@@ -246,6 +319,12 @@ Current strategy journal:
 
 Benchmark comparison:
 {benchmark_comparison}"""
+
+    if snapshot_csv:
+        prompt += f"""
+
+Portfolio snapshot history (CSV — use code_execution to analyze):
+{snapshot_csv}"""
 
     prompt += "\n\nAnalyze what worked, what didn't, and update the strategy journal."
     return prompt
@@ -301,6 +380,8 @@ def monthly_review_prompt(
     api_spend: str,
     benchmark_comparison: str = "",
     currency_data: str = "",
+    snapshot_csv: str = "",
+    trades_csv: str = "",
 ) -> str:
     prompt = f"""Perform a monthly strategic review.
 
@@ -327,6 +408,18 @@ Benchmark comparison:
 
 Currency exposure (USD/CHF):
 {currency_data}"""
+
+    if snapshot_csv:
+        prompt += f"""
+
+Portfolio snapshot history (CSV — use code_execution to analyze):
+{snapshot_csv}"""
+
+    if trades_csv:
+        prompt += f"""
+
+Trade history (CSV — use code_execution to analyze):
+{trades_csv}"""
 
     prompt += "\n\nProvide strategic guidance, journal updates, and a currency recommendation."
     return prompt

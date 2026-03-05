@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     tool_use_max_turns: int = 5             # Max multi-turn iterations in tool-use loop
     require_tool_evidence: bool = False     # Strict mode: reject BUY without position_size call
 
+    # Server-side code execution (Anthropic sandbox for quantitative analysis)
+    enable_code_execution: bool = False     # Python sandbox for weekly/monthly reviews
+
     # ── Risk tiers (growth vs moonshot) ──────────────────────────────
     # Growth: established companies with clear momentum (AAPL, NVDA, etc.)
     growth_max_position_pct: float = 0.25   # max 25% per growth position

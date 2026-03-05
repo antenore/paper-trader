@@ -5,7 +5,9 @@ from typing import Any
 
 import aiosqlite
 
-from paper_trader.ai.calculator import CALCULATOR_TOOLS, ToolUseAudit, execute_tool
+from paper_trader.ai.calculator import (
+    CALCULATOR_TOOLS, CODE_EXECUTION_TOOL, ToolUseAudit, execute_tool,
+)
 from paper_trader.ai.client import AIClient
 from paper_trader.ai.models import AnalysisResult, StockDecision
 from paper_trader.ai.prompts import ANALYSIS_SYSTEM, analysis_prompt, get_analysis_system
@@ -122,12 +124,18 @@ async def run_analysis(
 
     if settings.enable_tool_use:
         audit = ToolUseAudit()
+        tools = list(CALCULATOR_TOOLS)
+        if settings.enable_code_execution:
+            tools.append(CODE_EXECUTION_TOOL)
         response = await ai_client.call_with_tools(
             model=MODEL_SONNET,
-            system=get_analysis_system(enable_tools=True),
+            system=get_analysis_system(
+                enable_tools=True,
+                enable_code_execution=settings.enable_code_execution,
+            ),
             prompt=prompt_text,
             purpose="analysis",
-            tools=CALCULATOR_TOOLS,
+            tools=tools,
             execute_tool=execute_tool,
             audit=audit,
             is_dry_run=is_dry_run,

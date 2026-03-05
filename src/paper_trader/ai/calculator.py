@@ -42,6 +42,13 @@ class ToolUseAudit:
         }
 
 
+# ── Server-side code execution tool (Anthropic sandbox) ───────────────
+
+CODE_EXECUTION_TOOL: dict[str, str] = {
+    "type": "code_execution_20250825",
+    "name": "code_execution",
+}
+
 # ── Tool definitions (Anthropic JSON Schema format) ──────────────────
 
 CALCULATOR_TOOLS: list[dict[str, Any]] = [

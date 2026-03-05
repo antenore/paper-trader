@@ -24,6 +24,7 @@ def _reset_settings_singleton():
             "enable_tool_use",
             "require_tool_evidence",
             "tool_use_max_turns",
+            "enable_code_execution",
             "budget_warn_usd",
             "confidence_threshold",
         )
