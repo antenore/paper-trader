@@ -349,7 +349,7 @@ class TestResetForLive:
         await reset_for_live(db)
 
         portfolio = await queries.get_portfolio(db)
-        assert portfolio["cash"] == 800.0
+        assert portfolio["cash"] == 1000.0
 
         mode = await queries.get_setting(db, "mode")
         assert mode == "live"

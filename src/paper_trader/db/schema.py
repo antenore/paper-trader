@@ -140,6 +140,7 @@ MIGRATIONS = [
     ("decisions", "alpha_source", "TEXT DEFAULT ''"),
     ("portfolio_snapshots", "usd_chf_rate", "REAL"),
     ("positions", "currency", "TEXT DEFAULT 'USD'"),
+    ("trades", "commission_chf", "REAL DEFAULT 0"),
 ]
 
 

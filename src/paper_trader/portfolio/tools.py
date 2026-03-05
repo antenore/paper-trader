@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from paper_trader.config import settings
+from paper_trader.config import get_tier_settings, settings
 from paper_trader.market.prices import MarketDataProvider
+from paper_trader.portfolio.currency import symbol_currency, to_chf
 
 logger = logging.getLogger(__name__)
 
@@ -312,11 +313,21 @@ async def compute_relative_strength(
     return results
 
 
+def _pos_value_chf(pos: dict[str, Any], prices: dict[str, float], usd_chf_rate: float = 1.0) -> float:
+    """Position market value in CHF using live prices."""
+    price = prices.get(pos["symbol"], pos.get("current_price", pos["avg_cost"]))
+    currency = pos.get("currency") or symbol_currency(pos["symbol"])
+    return to_chf(pos["shares"] * price, currency, usd_chf_rate)
+
+
 async def build_tools_context(
     positions: list[dict[str, Any]],
     prices: dict[str, float],
     watchlist_symbols: list[str],
     market: MarketDataProvider,
+    portfolio_cash: float = 0.0,
+    usd_chf_rate: float = 1.0,
+    total_commissions: float | None = None,
 ) -> str:
     """Aggregate all tools into a text block for AI prompts."""
     sections = []
@@ -381,6 +392,29 @@ async def build_tools_context(
         except Exception:
             logger.debug("Relative strength computation failed", exc_info=True)
 
+    # === TIER ALLOCATION (bucket limits) ===
+    if positions:
+        lines = ["=== TIER ALLOCATION (bucket limits) ==="]
+        portfolio_total = sum(
+            _pos_value_chf(p, prices, usd_chf_rate) for p in positions
+        ) + portfolio_cash
+        for tier in ("growth", "moonshot"):
+            tier_cfg = get_tier_settings(tier)
+            tier_value = sum(
+                _pos_value_chf(p, prices, usd_chf_rate)
+                for p in positions
+                if p.get("risk_tier", "growth") == tier
+            )
+            max_value = portfolio_total * tier_cfg["max_bucket_pct"]
+            remaining = max(0, max_value - tier_value)
+            pct = (tier_value / portfolio_total * 100) if portfolio_total > 0 else 0
+            max_pct = tier_cfg["max_bucket_pct"] * 100
+            status = "FULL" if remaining < 1.0 else f"{remaining:.2f} CHF remaining"
+            lines.append(
+                f"  {tier}: {tier_value:.2f} CHF ({pct:.1f}%) of {max_value:.2f} CHF ({max_pct:.0f}% cap) — {status}"
+            )
+        sections.append("\n".join(lines))
+
     # === ETF OVERLAP WARNINGS ===
     overlap_warnings = []
     for symbol in watchlist_symbols:
@@ -389,5 +423,12 @@ async def build_tools_context(
             overlap_warnings.append(f"  {symbol}: {warning}")
     if overlap_warnings:
         sections.append("=== ETF OVERLAP WARNINGS ===\n" + "\n".join(overlap_warnings))
+
+    # === COMMISSION SUMMARY ===
+    if total_commissions is not None and total_commissions > 0:
+        sections.append(
+            f"=== COMMISSION SUMMARY ===\n"
+            f"  Total commissions paid: CHF {total_commissions:.2f}"
+        )
 
     return "\n\n".join(sections)

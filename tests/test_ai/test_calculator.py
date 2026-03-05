@@ -19,7 +19,10 @@ class TestPositionSize:
         # target_value = 800 * 0.15 = 120, shares = 120/150 = 0.8
         assert r["shares"] == 0.8
         assert r["cost_chf"] == 120.0
-        assert r["remaining_cash"] == 680.0
+        # commission included in remaining_cash
+        assert r["commission_chf"] > 0
+        assert r["total_cost_chf"] == r["cost_chf"] + r["commission_chf"]
+        assert r["remaining_cash"] == pytest.approx(800 - r["total_cost_chf"], abs=0.01)
 
     def test_with_existing_position(self):
         r = _calc_position_size("AAPL", price=150, cash=800, portfolio_total=800, target_pct=15, existing_value=60)
@@ -34,9 +37,10 @@ class TestPositionSize:
 
     def test_cash_limited(self):
         r = _calc_position_size("AAPL", price=150, cash=50, portfolio_total=800, target_pct=15)
-        # target = 120 but only 50 cash → buy 50/150 = 0.3333
-        assert r["shares"] == pytest.approx(0.3333, abs=0.001)
-        assert r["cost_chf"] == pytest.approx(50.0, abs=0.01)
+        # target = 120 but only 50 cash (minus commission)
+        # Commission for ~0.33 shares at $150 = $1.00 min → commission reduces available
+        assert r["shares"] > 0
+        assert r["total_cost_chf"] <= 50.0
 
     def test_zero_price_error(self):
         r = _calc_position_size("AAPL", price=0, cash=800, portfolio_total=800, target_pct=15)
@@ -50,6 +54,12 @@ class TestPositionSize:
         r = _calc_position_size("AAPL", price=100, cash=800, portfolio_total=800, target_pct=25)
         # cost = 200, weight = 200/800 = 25%
         assert r["new_weight_pct"] == 25.0
+
+    def test_six_stock_rounds_to_whole(self):
+        """SIX stocks should get whole share rounding."""
+        r = _calc_position_size("NESN.SW", price=100, cash=800, portfolio_total=800, target_pct=15)
+        # target = 120, shares = 120/100 = 1.2 → floor to 1
+        assert r["shares"] == 1.0
 
 
 class TestPnL:
@@ -133,8 +143,9 @@ class TestWhatIfBuy:
     def test_basic(self):
         r = _calc_what_if_buy("AAPL", shares=1, price=150, cash=800, positions_value=0)
         assert r["cost_chf"] == 150.0
-        assert r["new_cash"] == 650.0
-        assert r["new_total"] == 800.0
+        assert r["commission_chf"] > 0
+        assert r["total_cost_chf"] == r["cost_chf"] + r["commission_chf"]
+        assert r["new_cash"] == pytest.approx(800 - r["total_cost_chf"], abs=0.01)
         assert r["sector"] == "Technology"
 
     def test_insufficient_cash(self):
@@ -146,13 +157,20 @@ class TestWhatIfBuy:
             "AAPL", shares=1, price=100, cash=800, positions_value=200,
             sector_values={"Technology": 200},
         )
-        # cost = 100, new_total = 700 + 300 = 1000
-        # tech = 200 + 100 = 300, pct = 30%
-        assert r["sector_exposure_pct"]["Technology"] == 30.0
+        # cost = 100, commission ~$1, total_cost ~101
+        # new_cash = 800 - 101 = 699, new_positions = 300, new_total = 999
+        # tech = 300/999 ~= 30.03%
+        assert r["sector_exposure_pct"]["Technology"] == pytest.approx(30.0, abs=0.1)
 
     def test_unknown_sector(self):
         r = _calc_what_if_buy("ZZZZ", shares=1, price=50, cash=800, positions_value=0)
         assert r["sector"] == "Unknown"
+
+    def test_includes_commission(self):
+        """what_if_buy should include commission in total cost."""
+        r = _calc_what_if_buy("AAPL", shares=1, price=150, cash=800, positions_value=0)
+        assert "commission_chf" in r
+        assert r["commission_chf"] > 0
 
 
 class TestDispatch:

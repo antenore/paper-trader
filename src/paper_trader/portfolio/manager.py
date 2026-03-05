@@ -7,6 +7,7 @@ import aiosqlite
 
 from paper_trader.config import get_tier_settings, settings
 from paper_trader.db import queries
+from paper_trader.portfolio.commission import apply_slippage, calculate_commission, round_shares
 from paper_trader.portfolio.currency import symbol_currency, to_chf
 from paper_trader.portfolio.risk import check_risk
 
@@ -64,11 +65,14 @@ async def execute_buy(
 
     price is in the symbol's native currency (USD or CHF).
     Cash is deducted in CHF after FX conversion.
-    avg_cost is stored in the native currency.
+    avg_cost is stored in the native currency (slippage-adjusted).
     """
     portfolio = await queries.get_portfolio(db, is_dry_run=is_dry_run)
     if portfolio is None:
         return {"ok": False, "error": "Portfolio not initialized"}
+
+    # Apply slippage: BUY fills higher than quoted mid-price
+    price = apply_slippage(symbol, price, "BUY")
 
     currency = symbol_currency(symbol)
     cost_chf = to_chf(shares * price, currency, usd_chf_rate)
@@ -94,10 +98,21 @@ async def execute_buy(
 
     # Use the potentially adjusted shares from risk check
     shares = risk.get("adjusted_shares", shares)
+
+    # Apply broker share constraints (SIX: whole shares only)
+    shares = round_shares(symbol, shares)
+    if shares <= 0:
+        return {"ok": False, "reason": f"Insufficient for whole share of {symbol} on SIX"}
+
     cost_chf = to_chf(shares * price, currency, usd_chf_rate)
 
-    # Update cash (deduct in CHF)
-    new_cash = portfolio["cash"] - cost_chf
+    # Calculate commission and check cash sufficiency including fees
+    commission = calculate_commission(symbol, shares, price, usd_chf_rate)
+    new_cash = portfolio["cash"] - cost_chf - commission
+    if new_cash < 0:
+        return {"ok": False, "reason": f"Insufficient cash after commission ({commission:.2f} CHF)"}
+
+    # Update cash (deduct cost + commission in CHF)
     await queries.update_cash(db, new_cash, is_dry_run=is_dry_run)
 
     # Update or create position (RULE 005: tier-aware stop-loss at entry)
@@ -118,11 +133,12 @@ async def execute_buy(
 
     # Record trade
     trade_id = await queries.record_trade(
-        db, symbol, "BUY", shares, price, decision_id, is_dry_run=is_dry_run
+        db, symbol, "BUY", shares, price, decision_id, is_dry_run=is_dry_run,
+        commission_chf=commission,
     )
 
-    logger.info("BUY %s [%s] x%.2f @ %.2f (cost CHF %.2f)", symbol, risk_tier, shares, price, cost_chf)
-    return {"ok": True, "trade_id": trade_id, "shares": shares, "price": price, "total": cost_chf}
+    logger.info("BUY %s [%s] x%.2f @ %.2f (cost CHF %.2f, commission CHF %.2f)", symbol, risk_tier, shares, price, cost_chf, commission)
+    return {"ok": True, "trade_id": trade_id, "shares": shares, "price": price, "total": cost_chf, "commission": commission}
 
 
 async def execute_sell(
@@ -145,14 +161,21 @@ async def execute_sell(
     if shares > position["shares"]:
         shares = position["shares"]  # Sell max available
 
+    # Apply slippage: SELL fills lower than quoted mid-price
+    price = apply_slippage(symbol, price, "SELL")
+
     currency = position.get("currency") or symbol_currency(symbol)
     proceeds_chf = to_chf(shares * price, currency, usd_chf_rate)
 
-    # Update cash (add proceeds in CHF)
+    # Calculate commission and deduct from proceeds
+    commission = calculate_commission(symbol, shares, price, usd_chf_rate)
+    net_proceeds = proceeds_chf - commission
+
+    # Update cash (add net proceeds in CHF)
     portfolio = await queries.get_portfolio(db, is_dry_run=is_dry_run)
     if portfolio is None:
         return {"ok": False, "error": "Portfolio not initialized"}
-    await queries.update_cash(db, portfolio["cash"] + proceeds_chf, is_dry_run=is_dry_run)
+    await queries.update_cash(db, portfolio["cash"] + net_proceeds, is_dry_run=is_dry_run)
 
     # Update or close position
     remaining = position["shares"] - shares
@@ -163,9 +186,10 @@ async def execute_sell(
 
     # Record trade
     trade_id = await queries.record_trade(
-        db, symbol, "SELL", shares, price, decision_id, is_dry_run=is_dry_run
+        db, symbol, "SELL", shares, price, decision_id, is_dry_run=is_dry_run,
+        commission_chf=commission,
     )
 
     pnl = (price - position["avg_cost"]) * shares
-    logger.info("SELL %s x%.2f @ %.2f (proceeds CHF %.2f, P&L: %.2f)", symbol, shares, price, proceeds_chf, pnl)
-    return {"ok": True, "trade_id": trade_id, "shares": shares, "price": price, "total": proceeds_chf, "pnl": pnl}
+    logger.info("SELL %s x%.2f @ %.2f (proceeds CHF %.2f, commission CHF %.2f, P&L: %.2f)", symbol, shares, price, proceeds_chf, commission, pnl)
+    return {"ok": True, "trade_id": trade_id, "shares": shares, "price": price, "total": proceeds_chf, "pnl": pnl, "commission": commission}

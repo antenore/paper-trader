@@ -79,6 +79,7 @@ async def index(request: Request):
     watchlist = await queries.get_watchlist(db)
     decisions = await queries.get_decisions(db, limit=5)
     total_spend = await queries.get_total_spend(db, include_dry_run=False)
+    total_commissions = await queries.get_total_commissions(db)
     mode = await queries.get_setting(db, "mode") or "live"
     api_paused = await queries.get_setting(db, "api_paused") == "true"
     pause_reason = await queries.get_setting(db, "pause_reason") or ""
@@ -169,6 +170,7 @@ async def index(request: Request):
         "initial_cash": settings.initial_cash_chf,
         "active_range": active_range,
         "watchlist": watchlist,
+        "total_commissions": total_commissions,
     }))
 
 

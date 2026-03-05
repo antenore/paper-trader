@@ -133,7 +133,13 @@ async def run_trading_pipeline(
             if p["symbol"] not in watchlist_tiers:
                 watchlist_tiers[p["symbol"]] = p.get("risk_tier", "growth") or "growth"
 
-        for decision in analysis.decisions:
+        # Execute SELLs before BUYs so that freed cash/bucket space is available
+        sorted_decisions = sorted(
+            analysis.decisions,
+            key=lambda d: 0 if d.action == "SELL" else 1,
+        )
+
+        for decision in sorted_decisions:
             if decision.action == "HOLD":
                 continue
             if decision.confidence < settings.confidence_threshold:
@@ -157,9 +163,9 @@ async def run_trading_pipeline(
             trade_result = await _execute_decision(db, market, decision, is_dry_run, watchlist_tiers, usd_chf_rate=usd_chf_rate)
             result["trades"].append(trade_result)
 
-            # Track session spend for BUYs
+            # Track session spend for BUYs (cost + commission)
             if decision.action == "BUY" and trade_result.get("ok"):
-                session_spent += trade_result.get("total", 0)
+                session_spent += trade_result.get("total", 0) + trade_result.get("commission", 0)
                 position_symbols.append(decision.symbol)
 
         # Step 4: Take snapshot

@@ -2,19 +2,24 @@ import pytest
 from unittest.mock import patch
 
 from paper_trader.db import queries
+from paper_trader.portfolio.commission import apply_slippage, calculate_commission
 from paper_trader.portfolio.manager import execute_buy, execute_sell, get_portfolio_value
 
 
 @pytest.mark.asyncio
 async def test_buy_basic(db_with_portfolio):
-    # Buy 1 share at 100 (well within limits: 30% of 800 = 240)
+    # Buy 1 share at 100 (well within limits: 25% of 1000 = 250)
     result = await execute_buy(db_with_portfolio, "AAPL", 1.0, 100.0)
     assert result["ok"]
     assert result["shares"] == 1.0
-    assert result["total"] == 100.0
+    # Price should be slippage-adjusted (slightly higher than 100)
+    assert result["price"] > 100.0
+    assert result["commission"] > 0
 
+    cost = result["total"]
+    commission = result["commission"]
     p = await queries.get_portfolio(db_with_portfolio)
-    assert p["cash"] == 700.0
+    assert p["cash"] == pytest.approx(1000.0 - cost - commission, abs=0.01)
 
     positions = await queries.get_open_positions(db_with_portfolio)
     assert len(positions) == 1
@@ -23,24 +28,31 @@ async def test_buy_basic(db_with_portfolio):
 
 @pytest.mark.asyncio
 async def test_buy_adds_to_existing_position(db_with_portfolio):
-    # Use small amounts to stay within growth tier's 25% position cap ($200 of $800)
-    await execute_buy(db_with_portfolio, "AAPL", 1.0, 50.0)
-    await execute_buy(db_with_portfolio, "AAPL", 1.0, 60.0)
+    # Use small amounts to stay within growth tier's 25% position cap ($250 of $1000)
+    r1 = await execute_buy(db_with_portfolio, "AAPL", 1.0, 50.0)
+    r2 = await execute_buy(db_with_portfolio, "AAPL", 1.0, 60.0)
 
     pos = await queries.get_position_by_symbol(db_with_portfolio, "AAPL")
     assert pos["shares"] == 2.0
-    assert pos["avg_cost"] == 55.0  # (50+60)/2
+    # avg_cost is average of slippage-adjusted prices
+    expected_avg = (r1["price"] + r2["price"]) / 2
+    assert pos["avg_cost"] == pytest.approx(expected_avg, abs=0.01)
 
 
 @pytest.mark.asyncio
 async def test_sell_basic(db_with_portfolio):
-    await execute_buy(db_with_portfolio, "AAPL", 2.0, 100.0)
-    result = await execute_sell(db_with_portfolio, "AAPL", 2.0, 110.0)
-    assert result["ok"]
-    assert result["pnl"] == 20.0  # (110-100)*2
+    buy_result = await execute_buy(db_with_portfolio, "AAPL", 2.0, 100.0)
+    sell_result = await execute_sell(db_with_portfolio, "AAPL", 2.0, 110.0)
+    assert sell_result["ok"]
+    # P&L uses slippage-adjusted prices
+    expected_pnl = (sell_result["price"] - buy_result["price"]) * 2
+    assert sell_result["pnl"] == pytest.approx(expected_pnl, abs=0.01)
+    assert sell_result["commission"] > 0
 
     p = await queries.get_portfolio(db_with_portfolio)
-    assert p["cash"] == 820.0  # 800 - 200 + 220
+    # cash = 1000 - buy_cost - buy_comm + sell_proceeds - sell_comm
+    expected = 1000.0 - buy_result["total"] - buy_result["commission"] + sell_result["total"] - sell_result["commission"]
+    assert p["cash"] == pytest.approx(expected, abs=0.01)
 
     positions = await queries.get_open_positions(db_with_portfolio)
     assert len(positions) == 0
@@ -74,14 +86,16 @@ async def test_sell_no_position(db_with_portfolio):
 
 @pytest.mark.asyncio
 async def test_portfolio_value(db_with_portfolio):
-    await execute_buy(db_with_portfolio, "AAPL", 2.0, 100.0)
+    buy_result = await execute_buy(db_with_portfolio, "AAPL", 2.0, 100.0)
     prices = {"AAPL": 110.0}
     val = await get_portfolio_value(db_with_portfolio, prices)
-    assert val["cash"] == 600.0
+    expected_cash = 1000.0 - buy_result["total"] - buy_result["commission"]
+    assert val["cash"] == pytest.approx(expected_cash, abs=0.01)
     assert val["positions_value"] == 220.0
-    assert val["total_value"] == 820.0
+    assert val["total_value"] == pytest.approx(expected_cash + 220.0, abs=0.01)
     assert len(val["positions"]) == 1
-    assert val["positions"][0]["pnl"] == 20.0
+    # P&L = (110 - slipped_buy_price) * 2
+    assert val["positions"][0]["pnl"] == pytest.approx((110.0 - buy_result["price"]) * 2, abs=0.01)
 
 
 @pytest.mark.asyncio
@@ -112,34 +126,33 @@ async def test_buy_uses_settings_initial_cash(db):
         result = await execute_buy(db, "AAPL", 1.0, 100.0)
         assert result["ok"]
 
-    # With 1500 initial cash, safety stop is 750 — should be fine
-    # If it were hardcoded to 800, safety stop would be 400 — different risk profile
     p = await queries.get_portfolio(db)
-    assert p["cash"] == 1400.0
+    assert p["cash"] == pytest.approx(1500.0 - result["total"] - result["commission"], abs=0.01)
 
 
 @pytest.mark.asyncio
 async def test_buy_usd_with_fx(db_with_portfolio):
-    """BUY a USD stock with FX conversion — cost should be price * shares * rate."""
+    """BUY a USD stock with FX conversion — cost should be slipped_price * shares * rate."""
     result = await execute_buy(db_with_portfolio, "AAPL", 1.0, 100.0, usd_chf_rate=0.88)
     assert result["ok"]
-    # Cost in CHF should be 100 * 0.88 = 88
-    assert abs(result["total"] - 88.0) < 0.1
+    # Cost in CHF = slipped_price * 0.88 ≈ 100.05 * 0.88 ≈ 88.04
+    assert result["total"] == pytest.approx(result["price"] * 0.88, abs=0.01)
 
     p = await queries.get_portfolio(db_with_portfolio)
-    assert abs(p["cash"] - 712.0) < 0.1  # 800 - 88
+    assert p["cash"] == pytest.approx(1000.0 - result["total"] - result["commission"], abs=0.01)
 
 
 @pytest.mark.asyncio
 async def test_buy_chf_stock(db_with_portfolio):
-    """BUY a Swiss .SW stock — no FX conversion, cost equals price * shares."""
+    """BUY a Swiss .SW stock — no FX conversion, cost equals slipped_price * shares."""
     result = await execute_buy(db_with_portfolio, "NESN.SW", 1.0, 100.0, usd_chf_rate=0.88)
     assert result["ok"]
-    # CHF stock: cost should be 100 CHF (no conversion)
-    assert abs(result["total"] - 100.0) < 0.1
+    # CHF stock: cost = slipped_price (no FX), slippage = 10 bps → ~100.10
+    assert result["total"] == pytest.approx(result["price"], abs=0.01)
+    assert result["price"] > 100.0  # SIX slippage applied
 
     p = await queries.get_portfolio(db_with_portfolio)
-    assert abs(p["cash"] - 700.0) < 0.1
+    assert p["cash"] == pytest.approx(1000.0 - result["total"] - result["commission"], abs=0.01)
 
     # Check currency stored in position
     pos = await queries.get_position_by_symbol(db_with_portfolio, "NESN.SW")
@@ -148,26 +161,27 @@ async def test_buy_chf_stock(db_with_portfolio):
 
 @pytest.mark.asyncio
 async def test_sell_usd_with_fx(db_with_portfolio):
-    """SELL a USD stock — proceeds should be FX-converted to CHF."""
+    """SELL a USD stock — proceeds should be FX-converted to CHF with slippage."""
     await execute_buy(db_with_portfolio, "AAPL", 2.0, 100.0, usd_chf_rate=0.88)
     result = await execute_sell(db_with_portfolio, "AAPL", 2.0, 110.0, usd_chf_rate=0.88)
     assert result["ok"]
-    # Proceeds: 2 * 110 * 0.88 = 193.6 CHF
-    assert abs(result["total"] - 193.6) < 0.1
+    # Gross proceeds: 2 * slipped_sell_price * 0.88
+    expected_proceeds = 2 * result["price"] * 0.88
+    assert result["total"] == pytest.approx(expected_proceeds, abs=0.01)
 
 
 @pytest.mark.asyncio
 async def test_portfolio_value_with_fx(db_with_portfolio):
     """Portfolio value should convert USD positions to CHF."""
-    await execute_buy(db_with_portfolio, "AAPL", 2.0, 100.0, usd_chf_rate=0.88)
+    buy_result = await execute_buy(db_with_portfolio, "AAPL", 2.0, 100.0, usd_chf_rate=0.88)
     prices = {"AAPL": 110.0}
     val = await get_portfolio_value(db_with_portfolio, prices, usd_chf_rate=0.88)
     # positions_value = 2 * 110 * 0.88 = 193.6 CHF
     assert abs(val["positions_value"] - 193.6) < 0.1
-    # cash = 800 - 2*100*0.88 = 800 - 176 = 624
-    assert abs(val["cash"] - 624.0) < 0.1
-    # total = 624 + 193.6 = 817.6
-    assert abs(val["total_value"] - 817.6) < 0.1
+    # cash = 1000 - buy_cost - buy_commission
+    expected_cash = 1000.0 - buy_result["total"] - buy_result["commission"]
+    assert val["cash"] == pytest.approx(expected_cash, abs=0.1)
+    assert val["total_value"] == pytest.approx(expected_cash + 193.6, abs=0.1)
 
 
 @pytest.mark.asyncio
@@ -179,3 +193,92 @@ async def test_trades_recorded(db_with_portfolio):
     assert len(trades) == 2
     actions = {t["action"] for t in trades}
     assert actions == {"BUY", "SELL"}
+
+
+@pytest.mark.asyncio
+async def test_commission_recorded_in_trades(db_with_portfolio):
+    """Commission should be recorded in trades table."""
+    await execute_buy(db_with_portfolio, "AAPL", 1.0, 100.0)
+    trades = await queries.get_trades(db_with_portfolio)
+    assert len(trades) == 1
+    assert trades[0]["commission_chf"] > 0
+
+
+@pytest.mark.asyncio
+async def test_total_commissions_query(db_with_portfolio):
+    """get_total_commissions should sum all commissions."""
+    await execute_buy(db_with_portfolio, "AAPL", 1.0, 100.0)
+    await execute_sell(db_with_portfolio, "AAPL", 1.0, 110.0)
+    total = await queries.get_total_commissions(db_with_portfolio)
+    assert total > 0
+
+
+@pytest.mark.asyncio
+async def test_buy_commission_deducted_from_cash(db_with_portfolio):
+    """Commission should be deducted from cash on buy."""
+    result = await execute_buy(db_with_portfolio, "AAPL", 1.0, 100.0)
+    assert result["ok"]
+    cost = result["total"]
+    commission = result["commission"]
+
+    p = await queries.get_portfolio(db_with_portfolio)
+    assert p["cash"] == pytest.approx(1000.0 - cost - commission, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_sell_commission_deducted_from_proceeds(db_with_portfolio):
+    """Commission should be deducted from proceeds on sell."""
+    buy_result = await execute_buy(db_with_portfolio, "AAPL", 2.0, 100.0)
+    cash_after_buy = 1000.0 - buy_result["total"] - buy_result["commission"]
+
+    sell_result = await execute_sell(db_with_portfolio, "AAPL", 2.0, 110.0)
+    assert sell_result["ok"]
+    gross_proceeds = sell_result["total"]
+    sell_commission = sell_result["commission"]
+
+    p = await queries.get_portfolio(db_with_portfolio)
+    expected = cash_after_buy + gross_proceeds - sell_commission
+    assert p["cash"] == pytest.approx(expected, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_six_whole_shares_rounding(db_with_portfolio):
+    """SIX stocks should be rounded to whole shares."""
+    # Request 2.7 shares of NESN.SW — should get floor(2.7) = 2
+    result = await execute_buy(db_with_portfolio, "NESN.SW", 2.7, 100.0, usd_chf_rate=0.88)
+    assert result["ok"]
+    assert result["shares"] == 2.0  # Rounded down to whole
+
+
+@pytest.mark.asyncio
+async def test_slippage_applied_on_buy(db_with_portfolio):
+    """BUY should record a slippage-adjusted price higher than the quote."""
+    result = await execute_buy(db_with_portfolio, "AAPL", 1.0, 100.0)
+    assert result["ok"]
+    # US slippage = 5 bps → price should be 100.05
+    assert result["price"] == pytest.approx(100.05, abs=0.01)
+
+    # avg_cost in position should also reflect slipped price
+    pos = await queries.get_position_by_symbol(db_with_portfolio, "AAPL")
+    assert pos["avg_cost"] == pytest.approx(100.05, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_slippage_applied_on_sell(db_with_portfolio):
+    """SELL should record a slippage-adjusted price lower than the quote."""
+    await execute_buy(db_with_portfolio, "AAPL", 2.0, 100.0)
+    result = await execute_sell(db_with_portfolio, "AAPL", 2.0, 110.0)
+    assert result["ok"]
+    # US slippage = 5 bps → sell price should be 109.945
+    assert result["price"] == pytest.approx(109.945, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_slippage_six_larger_than_us(db_with_portfolio):
+    """SIX stocks should have larger slippage than US stocks."""
+    us_result = await execute_buy(db_with_portfolio, "AAPL", 1.0, 100.0)
+    six_result = await execute_buy(db_with_portfolio, "NESN.SW", 1.0, 100.0)
+    # SIX = 10 bps, US = 5 bps → SIX slippage is bigger
+    us_slip = us_result["price"] - 100.0
+    six_slip = six_result["price"] - 100.0
+    assert six_slip > us_slip

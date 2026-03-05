@@ -222,7 +222,7 @@ class TestTradingPipeline:
         assert len(snaps) == 1
         # SPY is in the market fixture at index 4 → price 458
         assert snaps[0]["spy_price"] == 458.0
-        assert snaps[0]["benchmark_value"] == 800.0  # First snapshot = initial cash
+        assert snaps[0]["benchmark_value"] == 1000.0  # First snapshot = initial cash
 
 
 class TestToolUseVerification:

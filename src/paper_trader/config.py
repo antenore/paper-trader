@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_prefix": "PT_"}
 
     # Portfolio
-    initial_cash_chf: float = 800.0
+    initial_cash_chf: float = 1000.0
     currency: str = "CHF"
 
     # Risk limits
@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     ]
 
     # Scheduling (timezone)
-    timezone: str = "US/Eastern"
+    timezone: str = "Europe/Zurich"
 
     # Movement threshold for midday smart-skip (%)
     movement_threshold_pct: float = 1.0

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from paper_trader.config import get_tier_settings, settings
+from paper_trader.portfolio.commission import calculate_commission, round_shares
 from paper_trader.portfolio.currency import symbol_currency, to_chf
 from paper_trader.portfolio.tools import check_sector_cap, get_sector
 
@@ -103,6 +104,13 @@ def check_risk(
         shares = allowed_value / price_chf if price_chf > 0 else 0
         cost_chf = to_chf(shares * price, currency, usd_chf_rate)
 
+    # Apply broker share constraints (SIX: whole shares, US: 4 decimals)
+    shares = round_shares(symbol, shares)
+    if shares <= 0:
+        return {"ok": False, "reason": f"Trade too small for whole share of {symbol}"}
+
+    cost_chf = to_chf(shares * price, currency, usd_chf_rate)
+
     if shares < 0.01:
         return {"ok": False, "reason": "Trade too small after risk adjustments"}
 
@@ -113,9 +121,11 @@ def check_risk(
         if p.get("risk_tier", "growth") == risk_tier
     )
     max_bucket_value = portfolio_total * tier_cfg["max_bucket_pct"]
+    allowed_bucket = max_bucket_value - tier_total
     if tier_total + cost_chf > max_bucket_value:
-        allowed_bucket = max_bucket_value - tier_total
-        if allowed_bucket <= 0:
+        if allowed_bucket < 1.0:
+            # Bucket already at/over limit (price appreciation can push existing
+            # positions past the cap) — block new buys into this tier.
             return {
                 "ok": False,
                 "reason": f"Bucket limit ({risk_tier}): tier at {tier_total:.2f}/{max_bucket_value:.2f}",
@@ -123,6 +133,13 @@ def check_risk(
         price_chf = to_chf(price, currency, usd_chf_rate)
         shares = min(shares, allowed_bucket / price_chf if price_chf > 0 else 0)
         cost_chf = to_chf(shares * price, currency, usd_chf_rate)
+
+    # Apply broker share constraints after bucket limit
+    shares = round_shares(symbol, shares)
+    if shares <= 0:
+        return {"ok": False, "reason": f"Trade too small for whole share of {symbol}"}
+
+    cost_chf = to_chf(shares * price, currency, usd_chf_rate)
 
     if shares < 0.01:
         return {"ok": False, "reason": "Trade too small after risk adjustments"}
@@ -136,5 +153,23 @@ def check_risk(
     )
     if not sector_check["ok"]:
         return sector_check
+
+    # 6. Final commission-aware cash check
+    estimated_commission = calculate_commission(symbol, shares, price, usd_chf_rate)
+    if cash - cost_chf - estimated_commission < 0:
+        # Reduce shares to fit with commission
+        price_chf = to_chf(price, currency, usd_chf_rate)
+        if price_chf > 0:
+            # Iteratively find shares that fit (commission depends on shares)
+            max_shares = shares
+            for _ in range(5):
+                comm = calculate_commission(symbol, max_shares, price, usd_chf_rate)
+                affordable = cash - comm
+                max_shares = affordable / price_chf if price_chf > 0 else 0
+                max_shares = round_shares(symbol, max_shares)
+                if max_shares <= 0:
+                    return {"ok": False, "reason": "Insufficient cash after commission"}
+            shares = max_shares
+            cost_chf = to_chf(shares * price, currency, usd_chf_rate)
 
     return {"ok": True, "adjusted_shares": shares}

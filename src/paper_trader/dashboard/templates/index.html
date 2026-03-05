@@ -35,8 +35,10 @@
         </div>
     </div>
     <div class="market-ticker__status">
-        <span class="market-dot" id="market-dot"></span>
-        <span id="market-label">CLOSED</span>
+        <span class="market-dot" id="six-dot"></span>
+        <span id="six-label">SIX</span>
+        <span class="market-dot" id="us-dot"></span>
+        <span id="us-label">US</span>
     </div>
 </div>
 
@@ -67,6 +69,10 @@
     <div class="stat-card">
         <div class="label">Open Positions</div>
         <div class="value">{{ positions|length }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Commissions</div>
+        <div class="value">{{ "%.2f"|format(total_commissions) }} <small style="font-size:0.55em;color:var(--pt-text-muted)">CHF</small></div>
     </div>
     <div class="stat-card">
         <div class="label">API Remaining</div>
@@ -209,31 +215,38 @@ document.addEventListener('DOMContentLoaded', () => {
     // ── Market Clock ────────────────────────────────────────
     const clockLocal = document.getElementById('clock-local');
     const clockNyse = document.getElementById('clock-nyse');
-    const marketDot = document.getElementById('market-dot');
-    const marketLabel = document.getElementById('market-label');
+    const sixDot = document.getElementById('six-dot');
+    const usDot = document.getElementById('us-dot');
     if (clockLocal && clockNyse) {
         const fmtLocal = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
         const fmtNyse = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'America/New_York' });
         const fmtTz = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' });
         const localTz = fmtTz.formatToParts(new Date()).find(p => p.type === 'timeZoneName')?.value || '';
 
+        function minsInTz(now, tz) {
+            const parts = new Intl.DateTimeFormat('en-US', {
+                timeZone: tz, hour: 'numeric', minute: 'numeric', weekday: 'short', hour12: false,
+            }).formatToParts(now);
+            const dow = parts.find(p => p.type === 'weekday')?.value;
+            const h = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
+            const m = parseInt(parts.find(p => p.type === 'minute')?.value || '0');
+            return { mins: h * 60 + m, weekday: !['Sat', 'Sun'].includes(dow) };
+        }
+
         function updateClock() {
             const now = new Date();
             clockLocal.textContent = fmtLocal.format(now) + ' ' + localTz;
             clockNyse.textContent = fmtNyse.format(now) + ' ET';
-            // Market open: Mon-Fri 9:30-16:00 ET
-            const nyParts = new Intl.DateTimeFormat('en-US', {
-                timeZone: 'America/New_York',
-                hour: 'numeric', minute: 'numeric', weekday: 'short', hour12: false,
-            }).formatToParts(now);
-            const dow = nyParts.find(p => p.type === 'weekday')?.value;
-            const h = parseInt(nyParts.find(p => p.type === 'hour')?.value || '0');
-            const m = parseInt(nyParts.find(p => p.type === 'minute')?.value || '0');
-            const mins = h * 60 + m;
-            const weekday = !['Sat', 'Sun'].includes(dow);
-            const isOpen = weekday && mins >= 570 && mins < 960; // 9:30=570, 16:00=960
-            marketDot.classList.toggle('open', isOpen);
-            if (marketLabel) marketLabel.textContent = isOpen ? 'OPEN' : 'CLOSED';
+
+            // SIX: Mon-Fri 09:00-17:30 Europe/Zurich
+            const zh = minsInTz(now, 'Europe/Zurich');
+            const sixOpen = zh.weekday && zh.mins >= 540 && zh.mins < 1050;
+            sixDot.classList.toggle('open', sixOpen);
+
+            // US: Mon-Fri 09:30-16:00 America/New_York
+            const ny = minsInTz(now, 'America/New_York');
+            const usOpen = ny.weekday && ny.mins >= 570 && ny.mins < 960;
+            usDot.classList.toggle('open', usOpen);
         }
         updateClock();
         setInterval(updateClock, 1000);

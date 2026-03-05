@@ -46,6 +46,6 @@ async def db():
 
 @pytest.fixture
 async def db_with_portfolio(db):
-    """Database with initialized portfolio (800 CHF)."""
-    await queries.init_portfolio(db, 800.0, "CHF")
+    """Database with initialized portfolio (1000 CHF)."""
+    await queries.init_portfolio(db, 1000.0, "CHF")
     return db

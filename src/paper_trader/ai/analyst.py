@@ -13,6 +13,7 @@ from paper_trader.config import MODEL_SONNET, settings
 from paper_trader.db import queries
 from paper_trader.market.news import NewsItem, format_news_for_ai
 from paper_trader.market.prices import MarketDataProvider
+from paper_trader.portfolio.currency import symbol_currency
 from paper_trader.portfolio.manager import get_portfolio_value
 from paper_trader.portfolio.tools import build_tools_context
 
@@ -66,16 +67,18 @@ async def run_analysis(
             f"(now {pos['current_price']:.2f}, P&L: {pos['pnl']:.2f})\n"
         )
 
-    # Get price data summary
+    # Get price data summary (with correct currency prefix)
     price_lines = []
     for symbol in all_symbols:
         if symbol in prices:
+            ccy = symbol_currency(symbol)
+            prefix = "CHF" if ccy == "CHF" else "$"
             history = await market.get_price_history(symbol, period="5d", interval="1d")
             if len(history) >= 2:
                 change = (history[-1]["close"] / history[-2]["close"] - 1) * 100
-                price_lines.append(f"{symbol}: ${prices[symbol]:.2f} ({change:+.1f}%)")
+                price_lines.append(f"{symbol}: {prefix} {prices[symbol]:.2f} ({change:+.1f}%)")
             else:
-                price_lines.append(f"{symbol}: ${prices[symbol]:.2f}")
+                price_lines.append(f"{symbol}: {prefix} {prices[symbol]:.2f}")
     price_data = "\n".join(price_lines)
 
     # Read pre-cached news from DB (populated asynchronously by the news_fetch job).
@@ -96,10 +99,18 @@ async def run_analysis(
     ]
     news_text = format_news_for_ai(news_items)
 
-    # Build tools context (stop-loss, sector, correlation, RS, ETF overlap)
+    # Query total commissions for context
+    total_commissions = await queries.get_total_commissions(db, is_dry_run=is_dry_run)
+
+    # Build tools context (stop-loss, sector, correlation, RS, ETF overlap, tier allocation)
     tools_context = ""
     try:
-        tools_context = await build_tools_context(positions, prices, watchlist_symbols, market)
+        tools_context = await build_tools_context(
+            positions, prices, watchlist_symbols, market,
+            portfolio_cash=portfolio["cash"],
+            usd_chf_rate=usd_chf_rate,
+            total_commissions=total_commissions,
+        )
     except Exception:
         logger.debug("Tools context build failed, continuing without it", exc_info=True)
 

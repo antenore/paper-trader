@@ -70,6 +70,7 @@ CALCULATOR_TOOLS: list[dict[str, Any]] = [
         "name": "calculate_pnl",
         "description": (
             "Calculate exact profit/loss for a position in CHF and percentage. "
+            "Optionally include buy/sell commissions for net P&L. "
             "MUST be called before every SELL decision."
         ),
         "input_schema": {
@@ -79,6 +80,8 @@ CALCULATOR_TOOLS: list[dict[str, Any]] = [
                 "entry_price": {"type": "number", "description": "Average entry price per share"},
                 "current_price": {"type": "number", "description": "Current share price"},
                 "shares": {"type": "number", "description": "Number of shares held"},
+                "buy_commission": {"type": "number", "description": "Commission paid on buy in CHF", "default": 0},
+                "sell_commission": {"type": "number", "description": "Estimated commission on sell in CHF", "default": 0},
             },
             "required": ["symbol", "entry_price", "current_price", "shares"],
         },
@@ -166,6 +169,7 @@ def _calc_position_size(
     usd_chf_rate: float = 1.0,
 ) -> dict[str, Any]:
     """Calculate shares to buy for a target allocation (cost in CHF)."""
+    from paper_trader.portfolio.commission import calculate_commission, round_shares
     from paper_trader.portfolio.currency import symbol_currency, to_chf
 
     if price <= 0:
@@ -180,14 +184,27 @@ def _calc_position_size(
     additional_value = max(0, target_value - existing_value)
     affordable = min(additional_value, cash)
     shares = affordable / price_chf if price_chf > 0 else 0
+    shares = round_shares(symbol, shares)
     cost_chf = shares * price_chf
+    commission_chf = calculate_commission(symbol, shares, price, usd_chf_rate)
+    total_cost_chf = cost_chf + commission_chf
+    # If total cost exceeds cash, reduce shares
+    if total_cost_chf > cash and price_chf > 0:
+        shares = round_shares(symbol, (cash - commission_chf) / price_chf)
+        if shares <= 0:
+            shares = 0.0
+        cost_chf = shares * price_chf
+        commission_chf = calculate_commission(symbol, shares, price, usd_chf_rate)
+        total_cost_chf = cost_chf + commission_chf
     new_weight = ((existing_value + cost_chf) / portfolio_total) * 100 if portfolio_total > 0 else 0
 
     return {
         "symbol": symbol,
         "shares": round(shares, 4),
         "cost_chf": round(cost_chf, 2),
-        "remaining_cash": round(cash - cost_chf, 2),
+        "commission_chf": round(commission_chf, 2),
+        "total_cost_chf": round(total_cost_chf, 2),
+        "remaining_cash": round(cash - total_cost_chf, 2),
         "new_weight_pct": round(new_weight, 2),
         "target_value": round(target_value, 2),
         "currency": currency,
@@ -200,16 +217,20 @@ def _calc_pnl(
     entry_price: float,
     current_price: float,
     shares: float,
+    buy_commission: float = 0,
+    sell_commission: float = 0,
 ) -> dict[str, Any]:
-    """Calculate P&L in CHF and percentage."""
+    """Calculate P&L in CHF and percentage, optionally net of commissions."""
     if entry_price <= 0:
         return {"error": "Entry price must be positive", "symbol": symbol}
 
     pnl_per_share = current_price - entry_price
     pnl_total = pnl_per_share * shares
+    total_commissions = buy_commission + sell_commission
+    net_pnl = pnl_total - total_commissions
     pnl_pct = (pnl_per_share / entry_price) * 100
 
-    return {
+    result: dict[str, Any] = {
         "symbol": symbol,
         "pnl_chf": round(pnl_total, 2),
         "pnl_pct": round(pnl_pct, 2),
@@ -218,6 +239,10 @@ def _calc_pnl(
         "shares": shares,
         "position_value": round(current_price * shares, 2),
     }
+    if total_commissions > 0:
+        result["total_commissions"] = round(total_commissions, 2)
+        result["net_pnl_chf"] = round(net_pnl, 2)
+    return result
 
 
 def _calc_risk_reward(
@@ -298,14 +323,17 @@ def _calc_what_if_buy(
     usd_chf_rate: float = 1.0,
 ) -> dict[str, Any]:
     """Simulate the impact of a buy on portfolio composition (all values in CHF)."""
+    from paper_trader.portfolio.commission import calculate_commission
     from paper_trader.portfolio.currency import symbol_currency, to_chf
 
     currency = symbol_currency(symbol)
     cost_chf = to_chf(shares * price, currency, usd_chf_rate)
-    if cost_chf > cash:
-        return {"error": f"Insufficient cash: need {cost_chf:.2f} CHF, have {cash:.2f} CHF", "symbol": symbol}
+    commission_chf = calculate_commission(symbol, shares, price, usd_chf_rate)
+    total_cost = cost_chf + commission_chf
+    if total_cost > cash:
+        return {"error": f"Insufficient cash: need {total_cost:.2f} CHF (incl. {commission_chf:.2f} commission), have {cash:.2f} CHF", "symbol": symbol}
 
-    new_cash = cash - cost_chf
+    new_cash = cash - total_cost
     new_positions_value = positions_value + cost_chf
     new_total = new_cash + new_positions_value
     new_weight = (cost_chf / new_total) * 100 if new_total > 0 else 0
@@ -314,6 +342,8 @@ def _calc_what_if_buy(
     result: dict[str, Any] = {
         "symbol": symbol,
         "cost_chf": round(cost_chf, 2),
+        "commission_chf": round(commission_chf, 2),
+        "total_cost_chf": round(total_cost, 2),
         "new_cash": round(new_cash, 2),
         "new_total": round(new_total, 2),
         "new_weight_pct": round(new_weight, 2),
@@ -352,6 +382,8 @@ _DISPATCH: dict[str, Any] = {
         entry_price=inputs["entry_price"],
         current_price=inputs["current_price"],
         shares=inputs["shares"],
+        buy_commission=inputs.get("buy_commission", 0),
+        sell_commission=inputs.get("sell_commission", 0),
     ),
     "risk_reward": lambda inputs: _calc_risk_reward(
         symbol=inputs["symbol"],

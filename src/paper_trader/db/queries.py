@@ -134,12 +134,13 @@ async def record_trade(
     price: float,
     decision_id: int | None = None,
     is_dry_run: bool = False,
+    commission_chf: float = 0.0,
 ) -> int:
     total = shares * price
     cursor = await db.execute(
-        """INSERT INTO trades (symbol, action, shares, price, total, decision_id, is_dry_run)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (symbol, action, shares, price, total, decision_id, int(is_dry_run)),
+        """INSERT INTO trades (symbol, action, shares, price, total, decision_id, is_dry_run, commission_chf)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (symbol, action, shares, price, total, decision_id, int(is_dry_run), commission_chf),
     )
     await db.commit()
     return cursor.lastrowid  # type: ignore[return-value]
@@ -153,6 +154,15 @@ async def get_trades(
         (int(is_dry_run), limit),
     )
     return [dict(r) for r in rows]
+
+
+async def get_total_commissions(db: aiosqlite.Connection, is_dry_run: bool = False) -> float:
+    """Get total commissions paid across all trades."""
+    rows = await db.execute_fetchall(
+        "SELECT COALESCE(SUM(commission_chf), 0) as total FROM trades WHERE is_dry_run = ?",
+        (int(is_dry_run),),
+    )
+    return rows[0]["total"]
 
 
 # ── Decisions ─────────────────────────────────────────────────────────

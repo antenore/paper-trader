@@ -18,13 +18,27 @@ _job_results: dict[str, dict] = {}
 
 
 def is_market_open() -> bool:
-    """Check if US market is currently open (Mon-Fri 9:30-16:00 ET)."""
-    now = datetime.now(ZoneInfo(settings.timezone))
-    if now.weekday() >= 5:  # Weekend
+    """Check if any tracked market is currently open (Mon-Fri).
+
+    Covers both:
+      - Swiss SIX: 09:00-17:30 Europe/Zurich
+      - US (NYSE/NASDAQ): 09:30-16:00 US/Eastern
+    """
+    now_zurich = datetime.now(ZoneInfo("Europe/Zurich"))
+    if now_zurich.weekday() >= 5:  # Weekend
         return False
-    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    return market_open <= now <= market_close
+
+    # SIX: 09:00-17:30 CET
+    six_open = now_zurich.replace(hour=9, minute=0, second=0, microsecond=0)
+    six_close = now_zurich.replace(hour=17, minute=30, second=0, microsecond=0)
+    if six_open <= now_zurich <= six_close:
+        return True
+
+    # US: 09:30-16:00 ET
+    now_et = datetime.now(ZoneInfo("US/Eastern"))
+    us_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    us_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    return us_open <= now_et <= us_close
 
 
 async def run_job(run_type: str) -> None:
@@ -71,16 +85,23 @@ async def run_job(run_type: str) -> None:
 
 
 # Schedule configuration: (run_type, cron_kwargs, job_id, job_name)
+# All times in Europe/Zurich (CET/CEST)
+# SIX: 09:00-17:30 CET | US: 15:30-22:00 CET | Overlap: 15:30-17:30
 SCHEDULE = [
     # News: runs 24/7 every N minutes — captures weekend geopolitical events
     ("news_fetch",     dict(minute=f"*/{settings.news_fetch_interval_minutes}"),    "news_fetch",      "News Fetch"),
-    # Trading: market hours only
-    ("full",           dict(day_of_week="mon-fri", hour=10, minute=0),              "morning_scan",    "Morning Scan"),
-    ("quick",          dict(day_of_week="mon-fri", hour=13, minute=0),              "midday_check",    "Midday Check"),
-    ("full",           dict(day_of_week="mon-fri", hour=14, minute=30),             "afternoon_scan",  "Afternoon Scan"),
-    ("snapshot",       dict(day_of_week="mon-fri", hour=16, minute=15),             "end_of_day",      "End of Day"),
-    ("weekly_review",  dict(day_of_week="fri", hour=17, minute=0),                  "weekly_review",   "Weekly Review"),
-    ("monthly_review", dict(day="1-3", day_of_week="mon-fri", hour=17, minute=30),  "monthly_review",  "Monthly Review"),
+    # SIX session
+    ("full",           dict(day_of_week="mon-fri", hour=9, minute=30),              "six_open_scan",   "SIX Open Scan"),
+    ("quick",          dict(day_of_week="mon-fri", hour=12, minute=0),              "europe_midday",   "European Midday"),
+    # US session (overlap with SIX tail)
+    ("full",           dict(day_of_week="mon-fri", hour=15, minute=45),             "us_open_scan",    "US Open Scan"),
+    ("quick",          dict(day_of_week="mon-fri", hour=18, minute=0),              "us_midday",       "US Midday"),
+    ("full",           dict(day_of_week="mon-fri", hour=20, minute=0),              "us_afternoon",    "US Afternoon"),
+    # End of day — after US close
+    ("snapshot",       dict(day_of_week="mon-fri", hour=22, minute=15),             "end_of_day",      "End of Day"),
+    # Reviews
+    ("weekly_review",  dict(day_of_week="fri", hour=22, minute=30),                 "weekly_review",   "Weekly Review"),
+    ("monthly_review", dict(day="1-3", day_of_week="mon-fri", hour=22, minute=45),  "monthly_review",  "Monthly Review"),
 ]
 
 
