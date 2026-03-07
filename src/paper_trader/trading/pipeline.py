@@ -15,7 +15,7 @@ from paper_trader.config import settings
 from paper_trader.db import queries
 from paper_trader.market.prices import MarketDataProvider
 from paper_trader.portfolio.manager import execute_buy, execute_sell, get_portfolio_value
-from paper_trader.portfolio.tools import check_etf_overlap, check_stop_losses
+from paper_trader.portfolio.tools import check_etf_overlap, check_stop_losses, detect_churn
 
 logger = logging.getLogger(__name__)
 
@@ -119,11 +119,21 @@ async def run_trading_pipeline(
                             decision.symbol,
                         )
 
-        # Step 3: Execute decisions (with RULE 001 session budget + RULE 003 ETF overlap)
+        # Step 3: Execute decisions (with RULE 001 session budget + RULE 003 ETF overlap + RULE 010 churn)
         portfolio_for_budget = await queries.get_portfolio(db, is_dry_run=is_dry_run)
         session_budget = (portfolio_for_budget["cash"] * settings.max_session_deploy_pct) if portfolio_for_budget else 0
         session_spent = 0.0
         position_symbols = [p["symbol"] for p in await queries.get_open_positions(db, is_dry_run=is_dry_run)]
+
+        # RULE 010: Churn detection — build cooloff/elevated-threshold map
+        churn_map: dict[str, dict] = {}
+        try:
+            churn_candidates = await queries.get_churn_candidates(db, days=5, is_dry_run=is_dry_run)
+            if churn_candidates:
+                for alert in detect_churn(churn_candidates, cooloff_hours=48):
+                    churn_map[alert["symbol"]] = alert
+        except Exception:
+            logger.debug("Churn detection failed in pipeline, continuing", exc_info=True)
 
         # Build tier map from watchlist + positions
         watchlist = await queries.get_watchlist(db)
@@ -153,6 +163,32 @@ async def run_trading_pipeline(
                     logger.info("Skipping BUY %s: ETF overlap — %s", decision.symbol, overlap)
                     result["trades"].append({"symbol": decision.symbol, "action": "BUY", "skipped": f"ETF overlap: {overlap}"})
                     continue
+
+                # RULE 010: Churn prevention — cooling-off and elevated threshold
+                churn = churn_map.get(decision.symbol)
+                if churn:
+                    if churn["in_cooloff"]:
+                        logger.info(
+                            "Skipping BUY %s: RULE 010 cooling-off (%.0fh remaining, %d round-trips)",
+                            decision.symbol, churn["cooloff_remaining_h"], churn["round_trips"],
+                        )
+                        result["trades"].append({
+                            "symbol": decision.symbol, "action": "BUY",
+                            "skipped": f"RULE 010 cooloff ({churn['cooloff_remaining_h']:.0f}h remaining)",
+                        })
+                        continue
+                    # Cooloff expired but still flagged — elevated threshold
+                    churn_threshold = 0.70
+                    if decision.confidence < churn_threshold:
+                        logger.info(
+                            "Skipping BUY %s: RULE 010 churn threshold (confidence %.2f < %.2f, %d round-trips)",
+                            decision.symbol, decision.confidence, churn_threshold, churn["round_trips"],
+                        )
+                        result["trades"].append({
+                            "symbol": decision.symbol, "action": "BUY",
+                            "skipped": f"RULE 010 churn threshold ({decision.confidence:.2f} < {churn_threshold})",
+                        })
+                        continue
 
                 # RULE 001: Session budget check
                 if session_spent >= session_budget:

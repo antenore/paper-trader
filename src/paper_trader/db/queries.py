@@ -169,6 +169,28 @@ async def get_recent_trades(
     return [dict(r) for r in rows]
 
 
+async def get_churn_candidates(
+    db: aiosqlite.Connection, days: int = 5, is_dry_run: bool = False,
+) -> list[dict[str, Any]]:
+    """Find symbols with both BUY and SELL within the last N days (churn risk)."""
+    rows = await db.execute_fetchall(
+        """SELECT symbol,
+                  COUNT(*) as trade_count,
+                  SUM(CASE WHEN action = 'BUY' THEN 1 ELSE 0 END) as buys,
+                  SUM(CASE WHEN action = 'SELL' THEN 1 ELSE 0 END) as sells,
+                  SUM(commission_chf) as total_commission,
+                  MAX(CASE WHEN action = 'SELL' THEN executed_at END) as last_sell_at
+           FROM trades
+           WHERE is_dry_run = ?
+             AND executed_at >= datetime('now', ? || ' days')
+           GROUP BY symbol
+           HAVING buys > 0 AND sells > 0
+           ORDER BY trade_count DESC""",
+        (int(is_dry_run), f"-{days}"),
+    )
+    return [dict(r) for r in rows]
+
+
 async def get_total_commissions(db: aiosqlite.Connection, is_dry_run: bool = False) -> float:
     """Get total commissions paid across all trades."""
     rows = await db.execute_fetchall(

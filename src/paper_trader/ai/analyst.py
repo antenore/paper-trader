@@ -14,6 +14,7 @@ from paper_trader.ai.models import AnalysisResult, StockDecision
 from paper_trader.ai.prompts import (
     ANALYSIS_SYSTEM, analysis_prompt, format_recent_trades, get_analysis_system,
 )
+from paper_trader.portfolio.tools import compute_currency_attribution, detect_churn
 from paper_trader.config import MODEL_SONNET, settings
 from paper_trader.db import queries
 from paper_trader.market.news import NewsItem, format_news_for_ai
@@ -111,7 +112,24 @@ async def run_analysis(
     recent_trades_raw = await queries.get_recent_trades(db, hours=48, is_dry_run=is_dry_run)
     recent_trades_text = format_recent_trades(recent_trades_raw)
 
-    # Build tools context (stop-loss, sector, correlation, RS, ETF overlap, tier allocation)
+    # Churn detection (RULE 010)
+    churn_alerts: list[dict] = []
+    try:
+        churn_candidates = await queries.get_churn_candidates(db, days=5, is_dry_run=is_dry_run)
+        if churn_candidates:
+            churn_alerts = detect_churn(churn_candidates, cooloff_hours=48)
+    except Exception:
+        logger.debug("Churn detection failed, continuing without it", exc_info=True)
+
+    # Currency performance attribution
+    currency_attr = None
+    try:
+        benchmark_summary = await queries.get_benchmark_summary(db, is_dry_run=is_dry_run)
+        currency_attr = compute_currency_attribution(benchmark_summary)
+    except Exception:
+        logger.debug("Currency attribution failed, continuing without it", exc_info=True)
+
+    # Build tools context (stop-loss, sector, correlation, RS, ETF overlap, tier allocation, churn, currency)
     tools_context = ""
     try:
         tools_context = await build_tools_context(
@@ -119,6 +137,8 @@ async def run_analysis(
             portfolio_cash=portfolio["cash"],
             usd_chf_rate=usd_chf_rate,
             total_commissions=total_commissions,
+            churn_alerts=churn_alerts,
+            currency_attribution=currency_attr,
         )
     except Exception:
         logger.debug("Tools context build failed, continuing without it", exc_info=True)

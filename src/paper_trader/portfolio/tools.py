@@ -1,8 +1,9 @@
-"""Trading tools: stop-loss, correlation, sector exposure, relative strength."""
+"""Trading tools: stop-loss, correlation, sector exposure, relative strength, churn detection."""
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from paper_trader.config import get_tier_settings, settings
@@ -320,6 +321,82 @@ def _pos_value_chf(pos: dict[str, Any], prices: dict[str, float], usd_chf_rate: 
     return to_chf(pos["shares"] * price, currency, usd_chf_rate)
 
 
+def detect_churn(
+    churn_candidates: list[dict[str, Any]],
+    cooloff_hours: int = 48,
+) -> list[dict[str, Any]]:
+    """Analyze churn candidates and determine cooling-off status.
+
+    Each candidate has: symbol, trade_count, buys, sells, total_commission, last_sell_at.
+    Returns list of churn alerts with cooling-off info.
+    """
+    now = datetime.now(timezone.utc)
+    alerts: list[dict[str, Any]] = []
+
+    for c in churn_candidates:
+        round_trips = min(c["buys"], c["sells"])
+        est_commission = c["total_commission"] or 0.0
+
+        # Parse last_sell_at and check cooling-off
+        cooloff_remaining_h = 0.0
+        in_cooloff = False
+        if c["last_sell_at"]:
+            try:
+                # SQLite datetime format: "YYYY-MM-DD HH:MM:SS"
+                last_sell = datetime.fromisoformat(c["last_sell_at"]).replace(tzinfo=timezone.utc)
+                elapsed_h = (now - last_sell).total_seconds() / 3600
+                cooloff_remaining_h = max(0, cooloff_hours - elapsed_h)
+                in_cooloff = cooloff_remaining_h > 0
+            except (ValueError, TypeError):
+                pass
+
+        alerts.append({
+            "symbol": c["symbol"],
+            "round_trips": round_trips,
+            "total_trades": c["trade_count"],
+            "commission_cost": round(est_commission, 2),
+            "in_cooloff": in_cooloff,
+            "cooloff_remaining_h": round(cooloff_remaining_h, 1),
+            "last_sell_at": c["last_sell_at"],
+        })
+
+    return alerts
+
+
+def compute_currency_attribution(
+    benchmark_summary: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Compute USD vs CHF performance attribution from benchmark summary.
+
+    Returns breakdown: portfolio_chf_return, spy_usd_return, fx_effect, spy_chf_return, alpha_chf.
+    """
+    if benchmark_summary is None:
+        return None
+
+    portfolio_return = benchmark_summary.get("portfolio_return_pct", 0)
+    spy_return = benchmark_summary.get("spy_return_pct", 0)
+
+    initial_fx = benchmark_summary.get("initial_fx_rate")
+    current_fx = benchmark_summary.get("current_fx_rate")
+
+    if not initial_fx or not current_fx:
+        return None
+
+    fx_change_pct = ((current_fx / initial_fx) - 1) * 100
+    # SPY return in CHF terms = SPY USD return + FX effect (compounded)
+    spy_chf_return = ((1 + spy_return / 100) * (1 + fx_change_pct / 100) - 1) * 100
+
+    return {
+        "portfolio_chf_return_pct": round(portfolio_return, 2),
+        "spy_usd_return_pct": round(spy_return, 2),
+        "fx_change_pct": round(fx_change_pct, 2),
+        "spy_chf_return_pct": round(spy_chf_return, 2),
+        "alpha_chf_pct": round(portfolio_return - spy_chf_return, 2),
+        "alpha_usd_pct": round(portfolio_return - spy_return, 2),
+        "fx_drag_pct": round(spy_chf_return - spy_return, 2),
+    }
+
+
 async def build_tools_context(
     positions: list[dict[str, Any]],
     prices: dict[str, float],
@@ -328,6 +405,8 @@ async def build_tools_context(
     portfolio_cash: float = 0.0,
     usd_chf_rate: float = 1.0,
     total_commissions: float | None = None,
+    churn_alerts: list[dict[str, Any]] | None = None,
+    currency_attribution: dict[str, Any] | None = None,
 ) -> str:
     """Aggregate all tools into a text block for AI prompts."""
     sections = []
@@ -430,5 +509,35 @@ async def build_tools_context(
             f"=== COMMISSION SUMMARY ===\n"
             f"  Total commissions paid: CHF {total_commissions:.2f}"
         )
+
+    # === CHURN ALERTS (RULE 010) ===
+    if churn_alerts:
+        lines = ["=== CHURN ALERTS (RULE 010) ==="]
+        for a in churn_alerts:
+            status = (
+                f"COOLING OFF ({a['cooloff_remaining_h']:.0f}h remaining — DO NOT BUY)"
+                if a["in_cooloff"]
+                else "cooloff expired — re-entry requires confidence >= 0.70 and NEW catalyst"
+            )
+            lines.append(
+                f"  {a['symbol']}: {a['round_trips']} round-trip(s), "
+                f"CHF {a['commission_cost']:.2f} commission drag — {status}"
+            )
+        sections.append("\n".join(lines))
+
+    # === CURRENCY ATTRIBUTION ===
+    if currency_attribution:
+        ca = currency_attribution
+        lines = [
+            "=== CURRENCY PERFORMANCE ATTRIBUTION ===",
+            f"  Portfolio return (CHF): {ca['portfolio_chf_return_pct']:+.2f}%",
+            f"  SPY return (USD):       {ca['spy_usd_return_pct']:+.2f}%",
+            f"  USD/CHF effect:         {ca['fx_change_pct']:+.2f}%",
+            f"  SPY return (CHF-adj):   {ca['spy_chf_return_pct']:+.2f}%",
+            f"  Alpha (CHF-adjusted):   {ca['alpha_chf_pct']:+.2f}%",
+            f"  Alpha (USD-only):       {ca['alpha_usd_pct']:+.2f}%",
+            f"  FX drag/boost:          {ca['fx_drag_pct']:+.2f}%",
+        ]
+        sections.append("\n".join(lines))
 
     return "\n\n".join(sections)
