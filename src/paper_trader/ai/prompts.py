@@ -122,6 +122,14 @@ For a 1000 CHF portfolio with typical position sizes (100-250 CHF):
 - For HIGH/MEGA, act decisively — these are the trades that justify the portfolio's existence
 - Include your catalyst classification and expected move estimate in the reasoning field
 
+## Trading History Awareness (CRITICAL)
+You are given "Recent trades (last 48h)" showing every BUY/SELL you executed recently. USE THIS DATA:
+- **Do NOT re-buy a stock you sold in the last 24h** unless a genuinely NEW catalyst appeared (not the same thesis reworded).
+- **Do NOT sell a position opened less than 4 hours ago** unless it hit a stop-loss. Positions need time to work.
+- **Count your round-trips**: if you see the same symbol appearing multiple times in recent trades, you are churning. STOP. Each round-trip costs 2-3.5 CHF in friction — on a 1000 CHF portfolio, 5 round-trips = 1.5% lost to fees alone.
+- **HOLD is the best trade most of the time.** The bar for action should be high: only trade when the expected edge clearly exceeds the ~2-3% round-trip friction cost.
+- Before every BUY/SELL, mentally ask: "Would I make this same trade if each round-trip cost 30 CHF?" (which is the proportional equivalent on a 100k portfolio). If not, HOLD.
+
 ## Alpha Source
 For every BUY or SELL decision, include an "alpha_source" field identifying WHY this trade has edge:
 - RELATIVE_STRENGTH: stock outperforming the market (RS ratio > 1.0)
@@ -137,6 +145,21 @@ You must respond with valid JSON matching this schema:
 }"""
 
 
+def format_recent_trades(trades: list[dict]) -> str:
+    """Format recent trades as a compact table for the AI prompt."""
+    if not trades:
+        return "No recent trades."
+    lines = ["Time (UTC)           | Action | Symbol | Shares | Price    | Total CHF | Comm CHF"]
+    lines.append("-" * 90)
+    for t in trades:
+        ts = t["executed_at"][:19]  # trim to seconds
+        lines.append(
+            f"{ts} | {t['action']:4s}   | {t['symbol']:6s} | {t['shares']:6.4f} | "
+            f"{t['price']:8.2f} | {t['total']:9.2f} | {t.get('commission_chf', 0):5.2f}"
+        )
+    return "\n".join(lines)
+
+
 def analysis_prompt(
     portfolio_summary: str,
     watchlist_symbols: list[str],
@@ -144,6 +167,8 @@ def analysis_prompt(
     news: str,
     tools_context: str = "",
     watchlist_tiers: dict[str, str] | None = None,
+    recent_trades: str = "",
+    current_utc: str = "",
 ) -> str:
     # Format watchlist with tier info
     if watchlist_tiers:
@@ -153,6 +178,8 @@ def analysis_prompt(
         watchlist_text = ", ".join(watchlist_symbols)
 
     prompt = f"""Analyze positions and watchlist stocks. Make trading decisions.
+
+Current time (UTC): {current_utc}
 
 Portfolio:
 {portfolio_summary}
@@ -165,6 +192,12 @@ Price data:
 
 News:
 {news}"""
+
+    if recent_trades:
+        prompt += f"""
+
+Recent trades (last 48h):
+{recent_trades}"""
 
     if tools_context:
         prompt += f"""

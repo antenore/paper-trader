@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import aiosqlite
@@ -10,7 +11,9 @@ from paper_trader.ai.calculator import (
 )
 from paper_trader.ai.client import AIClient
 from paper_trader.ai.models import AnalysisResult, StockDecision
-from paper_trader.ai.prompts import ANALYSIS_SYSTEM, analysis_prompt, get_analysis_system
+from paper_trader.ai.prompts import (
+    ANALYSIS_SYSTEM, analysis_prompt, format_recent_trades, get_analysis_system,
+)
 from paper_trader.config import MODEL_SONNET, settings
 from paper_trader.db import queries
 from paper_trader.market.news import NewsItem, format_news_for_ai
@@ -104,6 +107,10 @@ async def run_analysis(
     # Query total commissions for context
     total_commissions = await queries.get_total_commissions(db, is_dry_run=is_dry_run)
 
+    # Fetch recent trade history so the AI can see its own past actions
+    recent_trades_raw = await queries.get_recent_trades(db, hours=48, is_dry_run=is_dry_run)
+    recent_trades_text = format_recent_trades(recent_trades_raw)
+
     # Build tools context (stop-loss, sector, correlation, RS, ETF overlap, tier allocation)
     tools_context = ""
     try:
@@ -117,9 +124,11 @@ async def run_analysis(
         logger.debug("Tools context build failed, continuing without it", exc_info=True)
 
     # Call AI (with or without calculator tools)
+    current_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     prompt_text = analysis_prompt(
         portfolio_summary, watchlist_symbols, price_data, news_text,
         tools_context=tools_context, watchlist_tiers=watchlist_tiers,
+        recent_trades=recent_trades_text, current_utc=current_utc,
     )
 
     if settings.enable_tool_use:

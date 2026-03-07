@@ -144,6 +144,7 @@ async def run_weekly_review(
             prompt=prompt_text,
             purpose="weekly_review",
             is_dry_run=is_dry_run,
+            max_tokens=8192,
         )
 
     result = WeeklyReview(**raw)
@@ -271,6 +272,7 @@ async def run_monthly_review(
             prompt=prompt_text,
             purpose="monthly_review",
             is_dry_run=is_dry_run,
+            max_tokens=8192,
         )
 
     result = MonthlyReview(**raw)

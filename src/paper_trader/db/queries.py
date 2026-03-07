@@ -156,6 +156,19 @@ async def get_trades(
     return [dict(r) for r in rows]
 
 
+async def get_recent_trades(
+    db: aiosqlite.Connection, hours: int = 48, is_dry_run: bool = False,
+) -> list[dict[str, Any]]:
+    """Get trades from the last N hours, ordered oldest-first."""
+    rows = await db.execute_fetchall(
+        "SELECT symbol, action, shares, price, total, commission_chf, executed_at "
+        "FROM trades WHERE is_dry_run = ? AND executed_at >= datetime('now', ?) "
+        "ORDER BY executed_at ASC",
+        (int(is_dry_run), f"-{hours} hours"),
+    )
+    return [dict(r) for r in rows]
+
+
 async def get_total_commissions(db: aiosqlite.Connection, is_dry_run: bool = False) -> float:
     """Get total commissions paid across all trades."""
     rows = await db.execute_fetchall(
