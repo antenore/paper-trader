@@ -1,9 +1,21 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiosqlite
+
+
+def _business_days_ago(n: int) -> datetime:
+    """Return the UTC datetime that was *n* business days ago (skips Sat/Sun)."""
+    now = datetime.now(timezone.utc)
+    days_back = 0
+    while days_back < n:
+        now -= timedelta(days=1)
+        if now.weekday() < 5:  # Mon=0 … Fri=4
+            days_back += 1
+    # Return start of that business day (00:00 UTC)
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 # ── Settings ──────────────────────────────────────────────────────────
@@ -157,38 +169,119 @@ async def get_trades(
 
 
 async def get_recent_trades(
-    db: aiosqlite.Connection, hours: int = 48, is_dry_run: bool = False,
+    db: aiosqlite.Connection,
+    hours: int | None = None,
+    is_dry_run: bool = False,
+    business_days: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Get trades from the last N hours, ordered oldest-first."""
-    rows = await db.execute_fetchall(
-        "SELECT symbol, action, shares, price, total, commission_chf, executed_at "
-        "FROM trades WHERE is_dry_run = ? AND executed_at >= datetime('now', ?) "
-        "ORDER BY executed_at ASC",
-        (int(is_dry_run), f"-{hours} hours"),
-    )
+    """Get recent trades, ordered oldest-first.
+
+    If *business_days* is given, the lookback window spans that many trading days
+    (Sat/Sun excluded).  Falls back to *hours* (default 48) for backward compat.
+    """
+    if business_days is not None:
+        cutoff = _business_days_ago(business_days).isoformat()
+        rows = await db.execute_fetchall(
+            "SELECT symbol, action, shares, price, total, commission_chf, executed_at "
+            "FROM trades WHERE is_dry_run = ? AND executed_at >= ? "
+            "ORDER BY executed_at ASC",
+            (int(is_dry_run), cutoff),
+        )
+    else:
+        if hours is None:
+            hours = 48
+        rows = await db.execute_fetchall(
+            "SELECT symbol, action, shares, price, total, commission_chf, executed_at "
+            "FROM trades WHERE is_dry_run = ? AND executed_at >= datetime('now', ?) "
+            "ORDER BY executed_at ASC",
+            (int(is_dry_run), f"-{hours} hours"),
+        )
     return [dict(r) for r in rows]
 
 
 async def get_churn_candidates(
-    db: aiosqlite.Connection, days: int = 5, is_dry_run: bool = False,
+    db: aiosqlite.Connection,
+    days: int = 5,
+    is_dry_run: bool = False,
+    business_days: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Find symbols with both BUY and SELL within the last N days (churn risk)."""
+    """Find symbols with both BUY and SELL recently (churn risk).
+
+    When *business_days* is given, the lookback window skips weekends.
+    """
+    if business_days is not None:
+        cutoff = _business_days_ago(business_days).isoformat()
+        rows = await db.execute_fetchall(
+            """SELECT symbol,
+                      COUNT(*) as trade_count,
+                      SUM(CASE WHEN action = 'BUY' THEN 1 ELSE 0 END) as buys,
+                      SUM(CASE WHEN action = 'SELL' THEN 1 ELSE 0 END) as sells,
+                      SUM(commission_chf) as total_commission,
+                      MAX(CASE WHEN action = 'SELL' THEN executed_at END) as last_sell_at
+               FROM trades
+               WHERE is_dry_run = ?
+                 AND executed_at >= ?
+               GROUP BY symbol
+               HAVING buys > 0 AND sells > 0
+               ORDER BY trade_count DESC""",
+            (int(is_dry_run), cutoff),
+        )
+    else:
+        rows = await db.execute_fetchall(
+            """SELECT symbol,
+                      COUNT(*) as trade_count,
+                      SUM(CASE WHEN action = 'BUY' THEN 1 ELSE 0 END) as buys,
+                      SUM(CASE WHEN action = 'SELL' THEN 1 ELSE 0 END) as sells,
+                      SUM(commission_chf) as total_commission,
+                      MAX(CASE WHEN action = 'SELL' THEN executed_at END) as last_sell_at
+               FROM trades
+               WHERE is_dry_run = ?
+                 AND executed_at >= datetime('now', ? || ' days')
+               GROUP BY symbol
+               HAVING buys > 0 AND sells > 0
+               ORDER BY trade_count DESC""",
+            (int(is_dry_run), f"-{days}"),
+        )
+    return [dict(r) for r in rows]
+
+
+async def get_symbol_trade_summary(
+    db: aiosqlite.Connection,
+    business_days: int = 7,
+    is_dry_run: bool = False,
+) -> list[dict[str, Any]]:
+    """Per-symbol aggregate over the last N business days.
+
+    Returns rows with: symbol, buys, sells, total_bought_chf, total_sold_chf,
+    total_commission_chf, net_pnl_chf (sold - bought - commissions), first_trade, last_trade.
+    Only includes symbols that had at least one completed round-trip (buy AND sell).
+    """
+    cutoff = _business_days_ago(business_days).isoformat()
     rows = await db.execute_fetchall(
         """SELECT symbol,
-                  COUNT(*) as trade_count,
                   SUM(CASE WHEN action = 'BUY' THEN 1 ELSE 0 END) as buys,
                   SUM(CASE WHEN action = 'SELL' THEN 1 ELSE 0 END) as sells,
-                  SUM(commission_chf) as total_commission,
-                  MAX(CASE WHEN action = 'SELL' THEN executed_at END) as last_sell_at
+                  SUM(CASE WHEN action = 'BUY' THEN total ELSE 0 END) as total_bought_chf,
+                  SUM(CASE WHEN action = 'SELL' THEN total ELSE 0 END) as total_sold_chf,
+                  SUM(commission_chf) as total_commission_chf,
+                  MIN(executed_at) as first_trade,
+                  MAX(executed_at) as last_trade
            FROM trades
            WHERE is_dry_run = ?
-             AND executed_at >= datetime('now', ? || ' days')
+             AND executed_at >= ?
            GROUP BY symbol
            HAVING buys > 0 AND sells > 0
-           ORDER BY trade_count DESC""",
-        (int(is_dry_run), f"-{days}"),
+           ORDER BY (SUM(CASE WHEN action = 'SELL' THEN total ELSE 0 END)
+                   - SUM(CASE WHEN action = 'BUY' THEN total ELSE 0 END)
+                   - SUM(commission_chf)) ASC""",
+        (int(is_dry_run), cutoff),
     )
-    return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["net_pnl_chf"] = d["total_sold_chf"] - d["total_bought_chf"] - d["total_commission_chf"]
+        result.append(d)
+    return result
 
 
 async def get_total_commissions(db: aiosqlite.Connection, is_dry_run: bool = False) -> float:
@@ -198,6 +291,54 @@ async def get_total_commissions(db: aiosqlite.Connection, is_dry_run: bool = Fal
         (int(is_dry_run),),
     )
     return rows[0]["total"]
+
+
+async def count_trades_this_week(
+    db: aiosqlite.Connection, is_dry_run: bool = False,
+) -> int:
+    """Count AI-initiated trades (BUY+SELL) since Monday 00:00 UTC of the current week.
+
+    Stop-loss trades (executed in pipeline Step 0) are included in the count
+    but are exempt from the weekly budget in the pipeline itself.
+    """
+    now = datetime.now(timezone.utc)
+    # Monday of current week at 00:00 UTC
+    monday = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+    rows = await db.execute_fetchall(
+        "SELECT COUNT(*) as cnt FROM trades WHERE is_dry_run = ? AND executed_at >= ?",
+        (int(is_dry_run), monday.isoformat()),
+    )
+    return rows[0]["cnt"] if rows else 0
+
+
+async def get_latest_confidence_per_symbol(
+    db: aiosqlite.Connection,
+    symbols: list[str],
+    is_dry_run: bool = False,
+) -> dict[str, float]:
+    """Get the most recent decision confidence for each symbol.
+
+    Returns {symbol: confidence} for symbols that have recent decisions.
+    """
+    if not symbols:
+        return {}
+    placeholders = ",".join("?" * len(symbols))
+    rows = await db.execute_fetchall(
+        f"""SELECT symbol, confidence
+            FROM decisions
+            WHERE is_dry_run = ?
+              AND symbol IN ({placeholders})
+              AND id IN (
+                  SELECT MAX(id) FROM decisions
+                  WHERE is_dry_run = ?
+                    AND symbol IN ({placeholders})
+                  GROUP BY symbol
+              )""",
+        (int(is_dry_run), *symbols, int(is_dry_run), *symbols),
+    )
+    return {r["symbol"]: r["confidence"] for r in rows}
 
 
 # ── Decisions ─────────────────────────────────────────────────────────

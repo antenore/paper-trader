@@ -14,6 +14,46 @@ from paper_trader.db import queries
 logger = logging.getLogger(__name__)
 
 
+def _repair_json(s: str) -> str:
+    """Attempt to repair truncated JSON by closing open strings, arrays, and objects."""
+    # Strip trailing whitespace
+    s = s.rstrip()
+
+    # Track nesting to know what to close
+    in_string = False
+    escape = False
+    stack: list[str] = []  # '{' or '['
+
+    for ch in s:
+        if escape:
+            escape = False
+            continue
+        if ch == '\\' and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in ('{', '['):
+            stack.append(ch)
+        elif ch == '}' and stack and stack[-1] == '{':
+            stack.pop()
+        elif ch == ']' and stack and stack[-1] == '[':
+            stack.pop()
+
+    # If we ended inside a string, close it
+    if in_string:
+        s += '"'
+
+    # Close open brackets/braces in reverse order
+    for opener in reversed(stack):
+        s += ']' if opener == '[' else '}'
+
+    return s
+
+
 class BudgetExceededError(Exception):
     """Raised when API budget is exceeded."""
 
@@ -117,14 +157,21 @@ class AIClient:
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            # Try to extract JSON from markdown code block
             if "```json" in text:
                 json_str = text.split("```json")[1].split("```")[0].strip()
-                return json.loads(json_str)
             elif "```" in text:
                 json_str = text.split("```")[1].split("```")[0].strip()
+            else:
+                json_str = text
+
+            try:
                 return json.loads(json_str)
-            raise
+            except json.JSONDecodeError:
+                logger.warning(
+                    "JSON parse failed for %s, attempting repair (stop_reason=%s)",
+                    purpose, response.stop_reason,
+                )
+                return json.loads(_repair_json(json_str))
 
     async def call_with_tools(
         self,
@@ -307,12 +354,20 @@ class AIClient:
         except json.JSONDecodeError:
             if "```json" in text:
                 json_str = text.split("```json")[1].split("```")[0].strip()
-                data = json.loads(json_str)
             elif "```" in text:
                 json_str = text.split("```")[1].split("```")[0].strip()
-                data = json.loads(json_str)
             else:
-                raise
+                json_str = text
+
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "JSON parse failed for %s, attempting repair (stop_reason=%s)",
+                    purpose, response.stop_reason,
+                )
+                repaired = _repair_json(json_str)
+                data = json.loads(repaired)
 
         if audit is not None:
             audit.turns = turns

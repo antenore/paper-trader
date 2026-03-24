@@ -87,7 +87,7 @@ class TestAnalysisPrompt:
             news="No news",
             recent_trades="2026-03-05 14:00 | BUY | NVDA | 1.0000 | 183.00",
         )
-        assert "Recent trades (last 48h):" in result
+        assert "Recent trades (last 7 business days" in result
         assert "BUY | NVDA" in result
 
     def test_omits_recent_trades_when_empty(self):
@@ -104,5 +104,5 @@ class TestAnalysisPrompt:
         from paper_trader.ai.prompts import ANALYSIS_SYSTEM
 
         assert "Trading History Awareness" in ANALYSIS_SYSTEM
-        assert "Do NOT re-buy a stock you sold in the last 24h" in ANALYSIS_SYSTEM
-        assert "churning" in ANALYSIS_SYSTEM
+        assert "Do NOT re-buy a stock you sold" in ANALYSIS_SYSTEM
+        assert "ANTI-CHURN" in ANALYSIS_SYSTEM

@@ -7,6 +7,8 @@ from typing import Any
 import aiosqlite
 import anthropic
 
+from datetime import datetime, timezone
+
 from paper_trader.ai.analyst import run_analysis
 from paper_trader.ai.client import AIClient, APIPausedError, BudgetExceededError
 from paper_trader.ai.models import AnalysisResult, StockDecision
@@ -119,18 +121,21 @@ async def run_trading_pipeline(
                             decision.symbol,
                         )
 
-        # Step 3: Execute decisions (with RULE 001 session budget + RULE 003 ETF overlap + RULE 010 churn)
+        # Step 3: Execute decisions (RULE 001 session budget + RULE 003 ETF overlap + RULE 010 churn)
+
         portfolio_for_budget = await queries.get_portfolio(db, is_dry_run=is_dry_run)
         session_budget = (portfolio_for_budget["cash"] * settings.max_session_deploy_pct) if portfolio_for_budget else 0
         session_spent = 0.0
         position_symbols = [p["symbol"] for p in await queries.get_open_positions(db, is_dry_run=is_dry_run)]
 
-        # RULE 010: Churn detection — build cooloff/elevated-threshold map
+        # RULE 010: Churn detection — build cooloff/elevated-threshold map (7 business days)
         churn_map: dict[str, dict] = {}
         try:
-            churn_candidates = await queries.get_churn_candidates(db, days=5, is_dry_run=is_dry_run)
+            churn_candidates = await queries.get_churn_candidates(
+                db, business_days=7, is_dry_run=is_dry_run,
+            )
             if churn_candidates:
-                for alert in detect_churn(churn_candidates, cooloff_hours=48):
+                for alert in detect_churn(churn_candidates, cooloff_hours=settings.churn_cooloff_hours):
                     churn_map[alert["symbol"]] = alert
         except Exception:
             logger.debug("Churn detection failed in pipeline, continuing", exc_info=True)
@@ -149,12 +154,46 @@ async def run_trading_pipeline(
             key=lambda d: 0 if d.action == "SELL" else 1,
         )
 
+        session_trade_count = 0  # BUY + SELL actions executed this session
+
         for decision in sorted_decisions:
             if decision.action == "HOLD":
                 continue
             if decision.confidence < settings.confidence_threshold:
                 logger.info("Skipping %s %s (confidence %.2f < %.2f)", decision.action, decision.symbol, decision.confidence, settings.confidence_threshold)
                 continue
+
+            # Session trade cap (applies to both BUY and SELL)
+            if session_trade_count >= settings.max_session_trades:
+                logger.info(
+                    "Skipping %s %s: session trade cap reached (%d/%d)",
+                    decision.action, decision.symbol, session_trade_count, settings.max_session_trades,
+                )
+                result["trades"].append({
+                    "symbol": decision.symbol, "action": decision.action,
+                    "skipped": f"Session trade cap ({session_trade_count}/{settings.max_session_trades})",
+                })
+                continue
+
+            # RULE 011: Minimum hold period for SELL (system-enforced)
+            if decision.action == "SELL":
+                position = await queries.get_position_by_symbol(db, decision.symbol, is_dry_run=is_dry_run)
+                if position and position.get("opened_at"):
+                    try:
+                        opened = datetime.fromisoformat(position["opened_at"]).replace(tzinfo=timezone.utc)
+                        held_hours = (datetime.now(timezone.utc) - opened).total_seconds() / 3600
+                        if held_hours < settings.min_hold_hours:
+                            logger.info(
+                                "Skipping SELL %s: RULE 011 min hold (%.1fh < %dh)",
+                                decision.symbol, held_hours, settings.min_hold_hours,
+                            )
+                            result["trades"].append({
+                                "symbol": decision.symbol, "action": "SELL",
+                                "skipped": f"RULE 011 min hold ({held_hours:.0f}h < {settings.min_hold_hours}h)",
+                            })
+                            continue
+                    except (ValueError, TypeError):
+                        pass  # If we can't parse the date, allow the sell
 
             # RULE 003: ETF overlap check for BUY decisions
             if decision.action == "BUY":
@@ -178,7 +217,7 @@ async def run_trading_pipeline(
                         })
                         continue
                     # Cooloff expired but still flagged — elevated threshold
-                    churn_threshold = 0.70
+                    churn_threshold = settings.churn_confidence_threshold
                     if decision.confidence < churn_threshold:
                         logger.info(
                             "Skipping BUY %s: RULE 010 churn threshold (confidence %.2f < %.2f, %d round-trips)",
@@ -198,6 +237,10 @@ async def run_trading_pipeline(
 
             trade_result = await _execute_decision(db, market, decision, is_dry_run, watchlist_tiers, usd_chf_rate=usd_chf_rate)
             result["trades"].append(trade_result)
+
+            # Track executed trades
+            if trade_result.get("ok"):
+                session_trade_count += 1
 
             # Track session spend for BUYs (cost + commission)
             if decision.action == "BUY" and trade_result.get("ok"):

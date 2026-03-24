@@ -27,6 +27,10 @@ def _reset_settings_singleton():
             "enable_code_execution",
             "budget_warn_usd",
             "confidence_threshold",
+            "churn_cooloff_hours",
+            "churn_confidence_threshold",
+            "min_hold_hours",
+            "max_session_trades",
         )
     }
     yield

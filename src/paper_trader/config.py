@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     movement_threshold_pct: float = 1.0
 
     # Confidence threshold for executing trades
-    confidence_threshold: float = 0.4
+    confidence_threshold: float = 0.40
 
     # Benchmark for alpha/beta comparison
     benchmark_symbol: str = "SPY"
@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     # Correlation warning threshold (0-1)
     correlation_warn_threshold: float = 0.75
 
+    # Anti-churn settings
+    churn_cooloff_hours: int = 72           # Cooling-off period after selling a churned symbol
+    churn_confidence_threshold: float = 0.85  # Elevated confidence required after cooloff
+    min_hold_hours: int = 24                # System-enforced minimum hold before SELL
+    max_session_trades: int = 2             # Max BUY+SELL actions per session (HOLD doesn't count)
+
     # News collection
     news_fetch_interval_minutes: int = 30   # how often to run news_fetch job
     news_max_age_hours: int = 6             # how far back to look when building AI context
@@ -94,6 +100,10 @@ class Settings(BaseSettings):
 
     # Server-side code execution (Anthropic sandbox for quantitative analysis)
     enable_code_execution: bool = False     # Python sandbox for weekly/monthly reviews
+
+    # Profit-taking alerts (RULE 014)
+    profit_taking_threshold_pct: float = 0.25  # Alert when unrealized gain exceeds 25%
+    profit_taking_sell_pct: float = 0.33       # Recommend selling 33% of position
 
     # ── Risk tiers (growth vs moonshot) ──────────────────────────────
     # Growth: established companies with clear momentum (AAPL, NVDA, etc.)
@@ -170,6 +180,12 @@ CONFIG_KEYS: dict[str, tuple[str, type]] = {
     "config.enable_tool_use": ("enable_tool_use", bool),
     "config.tool_use_max_turns": ("tool_use_max_turns", int),
     "config.require_tool_evidence": ("require_tool_evidence", bool),
+    "config.churn_cooloff_hours": ("churn_cooloff_hours", int),
+    "config.churn_confidence_threshold": ("churn_confidence_threshold", float),
+    "config.min_hold_hours": ("min_hold_hours", int),
+    "config.max_session_trades": ("max_session_trades", int),
+"config.profit_taking_threshold_pct": ("profit_taking_threshold_pct", float),
+    "config.profit_taking_sell_pct": ("profit_taking_sell_pct", float),
 }
 
 

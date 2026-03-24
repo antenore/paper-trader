@@ -1,4 +1,4 @@
-"""Trading tools: stop-loss, correlation, sector exposure, relative strength, churn detection."""
+"""Trading tools: stop-loss, correlation, sector exposure, relative strength, churn detection, profit-taking alerts, geopolitical catalyst monitor."""
 
 from __future__ import annotations
 
@@ -397,6 +397,235 @@ def compute_currency_attribution(
     }
 
 
+# ── Geopolitical catalyst definitions ────────────────────────────────
+# Each catalyst has: keywords (for news scanning), affected symbols, and
+# separate escalation/de-escalation keyword sets.
+
+GEOPOLITICAL_CATALYSTS: dict[str, dict[str, Any]] = {
+    "Iran-Israel conflict": {
+        "keywords": ["iran", "israel", "tehran", "idf", "irgc", "hezbollah", "houthi",
+                      "strait of hormuz", "persian gulf", "middle east"],
+        "escalation": ["strike", "attack", "bomb", "missile", "retaliat", "escalat",
+                        "mobiliz", "offensive", "casualties", "invasion", "nuclear",
+                        "sanction", "embargo", "blockade", "shut down", "intercept"],
+        "de_escalation": ["ceasefire", "truce", "peace", "negotiat", "diplomati",
+                          "de-escalat", "withdraw", "agreement", "talks", "summit",
+                          "relief", "easing", "humanitarian", "deal"],
+        "affected_symbols": ["USO", "XLE", "CVX", "XOM", "COP", "SLB", "EOG",
+                             "LMT", "RTX", "GLD", "GDX"],
+    },
+    "Taiwan Strait tensions": {
+        "keywords": ["taiwan", "taipei", "tsmc", "south china sea", "china military",
+                      "pla navy", "strait"],
+        "escalation": ["exercise", "blockade", "incursion", "fighter jet", "warship",
+                        "drill", "mobiliz", "invasion", "sanction"],
+        "de_escalation": ["diplomati", "talks", "de-escalat", "cooperat", "stabiliz",
+                          "agreement", "trade deal"],
+        "affected_symbols": ["TSM", "NVDA", "AMD", "AVGO", "INTC", "AMAT",
+                             "LRCX", "KLAC", "SMH", "SOXX"],
+    },
+    "US-China trade war": {
+        "keywords": ["tariff", "trade war", "china trade", "us china", "beijing",
+                      "import duty", "export ban", "chip ban"],
+        "escalation": ["tariff", "ban", "restrict", "retali", "escalat", "blacklist",
+                        "sanction", "embargo", "export control"],
+        "de_escalation": ["trade deal", "exemption", "waiver", "negotiat", "agreement",
+                          "cooperat", "ease", "lift", "remove tariff", "phase"],
+        "affected_symbols": ["AAPL", "NVDA", "TSLA", "AMZN", "QQQ", "SPY",
+                             "FXI", "EEM"],
+    },
+    "Energy supply disruption": {
+        "keywords": ["opec", "oil supply", "crude oil", "oil price", "natural gas",
+                      "pipeline", "refinery", "energy crisis", "oil production"],
+        "escalation": ["cut", "disrupt", "shortage", "surge", "spike", "halt",
+                        "outage", "shut", "reduce production", "quota"],
+        "de_escalation": ["increase production", "boost output", "stabiliz", "ease",
+                          "oversupply", "glut", "release reserve", "strategic reserve"],
+        "affected_symbols": ["USO", "XLE", "CVX", "XOM", "COP", "SLB", "EOG"],
+    },
+}
+
+
+def check_profit_taking_alerts(
+    positions: list[dict[str, Any]],
+    prices: dict[str, float],
+    threshold_pct: float = 0.25,
+    sell_pct: float = 0.33,
+    usd_chf_rate: float = 1.0,
+) -> list[dict[str, Any]]:
+    """RULE 014: Check positions for unrealized gains exceeding threshold.
+
+    Returns list of alerts with recommended partial-exit quantities.
+    """
+    alerts: list[dict[str, Any]] = []
+    for pos in positions:
+        symbol = pos["symbol"]
+        current = prices.get(symbol)
+        if current is None:
+            continue
+
+        entry = pos["avg_cost"]
+        if entry <= 0:
+            continue
+
+        gain_pct = (current / entry) - 1.0
+        if gain_pct < threshold_pct:
+            continue
+
+        currency = pos.get("currency") or symbol_currency(symbol)
+        position_value = to_chf(pos["shares"] * current, currency, usd_chf_rate)
+        recommended_sell_shares = round(pos["shares"] * sell_pct, 4)
+        recommended_sell_value = to_chf(recommended_sell_shares * current, currency, usd_chf_rate)
+
+        alerts.append({
+            "symbol": symbol,
+            "gain_pct": round(gain_pct * 100, 2),
+            "entry_price": round(entry, 2),
+            "current_price": round(current, 2),
+            "shares": pos["shares"],
+            "position_value_chf": round(position_value, 2),
+            "recommended_sell_shares": recommended_sell_shares,
+            "recommended_sell_value_chf": round(recommended_sell_value, 2),
+            "threshold_pct": round(threshold_pct * 100, 1),
+        })
+
+    # Sort by gain descending — biggest winners first
+    alerts.sort(key=lambda x: x["gain_pct"], reverse=True)
+    return alerts
+
+
+def check_geopolitical_catalysts(
+    news_items: list[dict[str, Any]],
+    position_symbols: list[str],
+) -> list[dict[str, Any]]:
+    """Scan recent news for geopolitical catalyst signals.
+
+    Returns list of catalyst alerts with escalation/de-escalation signals
+    and confidence modifiers for affected held positions.
+    """
+    alerts: list[dict[str, Any]] = []
+
+    for catalyst_name, catalyst in GEOPOLITICAL_CATALYSTS.items():
+        # Check if any news matches this catalyst's keywords
+        matching_headlines: list[str] = []
+        escalation_hits = 0
+        de_escalation_hits = 0
+
+        for item in news_items:
+            title = (item.get("title") or "").lower()
+            summary = (item.get("summary") or "").lower()
+            text = f"{title} {summary}"
+
+            # Check if this news item relates to this catalyst
+            if not any(kw in text for kw in catalyst["keywords"]):
+                continue
+
+            matching_headlines.append(item.get("title", "")[:100])
+
+            # Count escalation vs de-escalation signals
+            for esc_kw in catalyst["escalation"]:
+                if esc_kw in text:
+                    escalation_hits += 1
+            for de_kw in catalyst["de_escalation"]:
+                if de_kw in text:
+                    de_escalation_hits += 1
+
+        if not matching_headlines:
+            continue
+
+        # Determine signal direction and confidence modifier
+        total_signals = escalation_hits + de_escalation_hits
+        if total_signals == 0:
+            signal = "NEUTRAL"
+            confidence_modifier = 0.0
+        elif escalation_hits > de_escalation_hits:
+            ratio = escalation_hits / total_signals
+            signal = "ESCALATION"
+            # +0.05 to +0.10 boost for positions that benefit from escalation
+            confidence_modifier = round(min(0.10, ratio * 0.10), 2)
+        else:
+            ratio = de_escalation_hits / total_signals
+            signal = "DE-ESCALATION"
+            # -0.05 to -0.10 for positions whose thesis depends on escalation
+            confidence_modifier = round(-min(0.10, ratio * 0.10), 2)
+
+        # Find which held positions are affected
+        affected_held = [s for s in position_symbols if s in catalyst["affected_symbols"]]
+
+        alerts.append({
+            "catalyst": catalyst_name,
+            "signal": signal,
+            "escalation_hits": escalation_hits,
+            "de_escalation_hits": de_escalation_hits,
+            "confidence_modifier": confidence_modifier,
+            "affected_symbols": catalyst["affected_symbols"],
+            "affected_held": affected_held,
+            "headline_count": len(matching_headlines),
+            "sample_headlines": matching_headlines[:3],
+        })
+
+    return alerts
+
+
+def recommend_position_consolidation(
+    positions: list[dict[str, Any]],
+    prices: dict[str, float],
+    confidence_map: dict[str, float],
+    usd_chf_rate: float = 1.0,
+    target_count: int = 6,
+) -> list[dict[str, Any]]:
+    """Score positions and recommend consolidation for small/low-conviction holdings.
+
+    Score = (confidence × value_chf) / (commission_drag_pct × 100).
+    Higher score = better position to keep.
+    """
+    from paper_trader.portfolio.commission import calculate_commission
+
+    scored: list[dict[str, Any]] = []
+    for pos in positions:
+        symbol = pos["symbol"]
+        price = prices.get(symbol)
+        if price is None:
+            continue
+
+        currency = pos.get("currency") or symbol_currency(symbol)
+        value_chf = to_chf(pos["shares"] * price, currency, usd_chf_rate)
+        confidence = confidence_map.get(symbol, 0.50)  # default to neutral
+
+        # Estimate commission as % of position value
+        comm = calculate_commission(symbol, pos["shares"], price, usd_chf_rate)
+        comm_pct = (comm / value_chf * 100) if value_chf > 0 else 5.0
+
+        # Score: high confidence + large position + low commission drag → keep
+        score = (confidence * value_chf) / max(comm_pct * 100, 1.0)
+
+        # P&L
+        entry = pos.get("avg_cost", price)
+        pnl_pct = ((price / entry) - 1.0) * 100 if entry > 0 else 0.0
+
+        scored.append({
+            "symbol": symbol,
+            "score": round(score, 2),
+            "confidence": round(confidence, 2),
+            "value_chf": round(value_chf, 2),
+            "commission_drag_pct": round(comm_pct, 2),
+            "pnl_pct": round(pnl_pct, 2),
+            "recommendation": "",  # filled below
+        })
+
+    # Sort by score descending (best positions first)
+    scored.sort(key=lambda x: x["score"], reverse=True)
+
+    # Top N → KEEP, rest → TRIM
+    for i, s in enumerate(scored):
+        if i < target_count:
+            s["recommendation"] = "KEEP"
+        else:
+            s["recommendation"] = "TRIM — low score, consider selling to reduce complexity"
+
+    return scored
+
+
 async def build_tools_context(
     positions: list[dict[str, Any]],
     prices: dict[str, float],
@@ -407,9 +636,107 @@ async def build_tools_context(
     total_commissions: float | None = None,
     churn_alerts: list[dict[str, Any]] | None = None,
     currency_attribution: dict[str, Any] | None = None,
+    symbol_trade_summary: list[dict[str, Any]] | None = None,
+    news_items: list[dict[str, Any]] | None = None,
+    confidence_map: dict[str, float] | None = None,
+    signal_report: str = "",
 ) -> str:
     """Aggregate all tools into a text block for AI prompts."""
     sections = []
+
+    # === SIGNAL QUALITY REPORT === (show FIRST so AI sees it immediately)
+    if signal_report:
+        sections.append(signal_report)
+
+    # === POSITION CONSOLIDATION RECOMMENDER ===
+    if positions and confidence_map:
+        consolidation = recommend_position_consolidation(
+            positions, prices, confidence_map,
+            usd_chf_rate=usd_chf_rate,
+        )
+        trim_candidates = [c for c in consolidation if c["recommendation"].startswith("TRIM")]
+        if trim_candidates:
+            lines = ["=== POSITION CONSOLIDATION RECOMMENDER ==="]
+            lines.append("  Positions ranked by composite score (confidence × value / commission drag):")
+            for c in consolidation:
+                marker = " >>> TRIM" if c["recommendation"].startswith("TRIM") else ""
+                lines.append(
+                    f"  {c['symbol']:6s} | score={c['score']:7.1f} | conf={c['confidence']:.2f} | "
+                    f"CHF {c['value_chf']:7.2f} | comm_drag={c['commission_drag_pct']:.1f}% | "
+                    f"P&L={c['pnl_pct']:+.1f}%{marker}"
+                )
+            lines.append(
+                f"  >>> {len(trim_candidates)} position(s) scored below threshold — "
+                f"consider trimming to reduce complexity and commission drag."
+            )
+            sections.append("\n".join(lines))
+
+    # === PROFIT-TAKING ALERTS (RULE 014) ===
+    profit_alerts = check_profit_taking_alerts(
+        positions, prices,
+        threshold_pct=settings.profit_taking_threshold_pct,
+        sell_pct=settings.profit_taking_sell_pct,
+        usd_chf_rate=usd_chf_rate,
+    )
+    if profit_alerts:
+        lines = ["=== PROFIT-TAKING ALERTS (RULE 014) ==="]
+        sell_pct_display = round(settings.profit_taking_sell_pct * 100)
+        for a in profit_alerts:
+            lines.append(
+                f"  {a['symbol']}: +{a['gain_pct']:.1f}% unrealized gain "
+                f"(entry: {a['entry_price']:.2f}, now: {a['current_price']:.2f})"
+            )
+            lines.append(
+                f"    Position: {a['shares']:.4f} shares = CHF {a['position_value_chf']:.2f}"
+            )
+            lines.append(
+                f"    >>> RECOMMENDED: Sell {a['recommended_sell_shares']:.4f} shares "
+                f"({sell_pct_display}%) = ~CHF {a['recommended_sell_value_chf']:.2f} to lock in gains"
+            )
+        lines.append(
+            f"  Threshold: {a['threshold_pct']:.0f}% — any position above this triggers mandatory review"
+        )
+        sections.append("\n".join(lines))
+
+    # === GEOPOLITICAL CATALYST MONITOR ===
+    if news_items:
+        position_symbols = [p["symbol"] for p in positions]
+        geo_alerts = check_geopolitical_catalysts(news_items, position_symbols)
+        if geo_alerts:
+            lines = ["=== GEOPOLITICAL CATALYST MONITOR ==="]
+            for ga in geo_alerts:
+                signal_icon = {
+                    "ESCALATION": "ESCALATION",
+                    "DE-ESCALATION": "DE-ESCALATION",
+                    "NEUTRAL": "NEUTRAL",
+                }[ga["signal"]]
+                lines.append(
+                    f"  {ga['catalyst']}: {signal_icon} "
+                    f"(esc:{ga['escalation_hits']} / de-esc:{ga['de_escalation_hits']}, "
+                    f"{ga['headline_count']} matching headlines)"
+                )
+                if ga["confidence_modifier"] != 0:
+                    lines.append(
+                        f"    Confidence modifier: {ga['confidence_modifier']:+.2f} "
+                        f"for affected positions"
+                    )
+                if ga["affected_held"]:
+                    lines.append(
+                        f"    YOUR POSITIONS AFFECTED: {', '.join(ga['affected_held'])}"
+                    )
+                    if ga["signal"] == "DE-ESCALATION" and ga["confidence_modifier"] < 0:
+                        lines.append(
+                            f"    >>> SELL REVIEW FLAG: De-escalation threatens thesis "
+                            f"for {', '.join(ga['affected_held'])}. Review exit."
+                        )
+                else:
+                    lines.append(
+                        f"    Affected symbols (not held): {', '.join(ga['affected_symbols'][:5])}"
+                    )
+                # Sample headlines
+                for headline in ga["sample_headlines"]:
+                    lines.append(f"      - {headline}")
+            sections.append("\n".join(lines))
 
     # === STOP-LOSS ALERTS ===
     triggered = check_stop_losses(positions, prices)
@@ -510,14 +837,37 @@ async def build_tools_context(
             f"  Total commissions paid: CHF {total_commissions:.2f}"
         )
 
+    # === SYMBOL P&L SCORECARD (7 business days) ===
+    if symbol_trade_summary:
+        lines = ["=== SYMBOL P&L SCORECARD (last 7 business days) ==="]
+        lines.append("  Symbol | Round-trips | Commissions | Net P&L CHF | Verdict")
+        lines.append("  " + "-" * 70)
+        for s in symbol_trade_summary:
+            rt = min(s["buys"], s["sells"])
+            verdict = "LOSING MONEY" if s["net_pnl_chf"] < 0 else "OK"
+            if rt >= 2 and s["net_pnl_chf"] < 0:
+                verdict = "STOP TRADING THIS"
+            lines.append(
+                f"  {s['symbol']:6s} | {rt:11d} | CHF {s['total_commission_chf']:7.2f} | "
+                f"CHF {s['net_pnl_chf']:+8.2f} | {verdict}"
+            )
+        total_pnl = sum(s["net_pnl_chf"] for s in symbol_trade_summary)
+        total_comm = sum(s["total_commission_chf"] for s in symbol_trade_summary)
+        lines.append(f"  TOTAL round-trip P&L: CHF {total_pnl:+.2f} (commissions: CHF {total_comm:.2f})")
+        if total_pnl < 0:
+            lines.append(f"  >>> You LOST CHF {abs(total_pnl):.2f} from round-trip trading. REDUCE ACTIVITY. <<<")
+        sections.append("\n".join(lines))
+
     # === CHURN ALERTS (RULE 010) ===
     if churn_alerts:
+        cooloff_h = settings.churn_cooloff_hours
+        churn_thresh = settings.churn_confidence_threshold
         lines = ["=== CHURN ALERTS (RULE 010) ==="]
         for a in churn_alerts:
             status = (
                 f"COOLING OFF ({a['cooloff_remaining_h']:.0f}h remaining — DO NOT BUY)"
                 if a["in_cooloff"]
-                else "cooloff expired — re-entry requires confidence >= 0.70 and NEW catalyst"
+                else f"cooloff expired — re-entry requires confidence >= {churn_thresh:.2f} and NEW catalyst"
             )
             lines.append(
                 f"  {a['symbol']}: {a['round_trips']} round-trip(s), "

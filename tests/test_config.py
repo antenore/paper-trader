@@ -15,7 +15,7 @@ def test_default_settings():
     assert s.safety_stop_pct == 0.50
     assert s.max_position_pct == 0.40
     assert s.min_cash_reserve == 50.0
-    assert s.confidence_threshold == 0.4
+    assert s.confidence_threshold == 0.40
 
 
 def test_model_pricing_has_all_models():

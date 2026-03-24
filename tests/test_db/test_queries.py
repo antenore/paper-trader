@@ -1,6 +1,10 @@
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
 import pytest
 
 from paper_trader.db import queries
+from paper_trader.db.queries import _business_days_ago
 
 
 @pytest.mark.asyncio
@@ -478,3 +482,199 @@ async def test_daily_spend_excludes_dry_run(db):
 
     assert abs(all_total - 0.013) < 0.0001
     assert abs(live_total - 0.003) < 0.0001
+
+
+# ── Business days helper ─────────────────────────────────────────────
+
+
+class TestBusinessDaysAgo:
+    def test_weekday_counts_only_business_days(self):
+        """On a Wednesday, 5 business days ago is the previous Wednesday."""
+        # Fix "now" to Wednesday 2026-03-11 12:00 UTC
+        fake_now = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+        with patch("paper_trader.db.queries.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = _business_days_ago(5)
+        # 5 business days back from Wed Mar 11:
+        # Mar 10 (Mon), Mar 9 (Sun skip), Mar 8 (Sat skip), Mar 6 (Fri),
+        # Mar 5 (Thu), Mar 4 (Wed) = 5 business days
+        assert result.weekday() < 5  # Must be a weekday
+        assert result.date() == datetime(2026, 3, 4).date()
+
+    def test_monday_skips_weekend(self):
+        """On Monday, 1 business day ago is Friday."""
+        fake_now = datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc)  # Monday
+        with patch("paper_trader.db.queries.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = _business_days_ago(1)
+        assert result.date() == datetime(2026, 3, 6).date()  # Friday
+
+    def test_seven_business_days(self):
+        """7 business days back spans ~9 calendar days (crossing a weekend)."""
+        fake_now = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)  # Wednesday
+        with patch("paper_trader.db.queries.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = _business_days_ago(7)
+        # 7 biz days back from Wed Mar 11:
+        # Tue 10, Mon 9, (skip Sun 8, Sat 7), Fri 6, Thu 5, Wed 4, Tue 3, Mon 2
+        # = Mon Mar 2 (7th business day back)
+        assert result.date() == datetime(2026, 3, 2).date()
+
+
+# ── Recent trades with business days ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_recent_trades_business_days(db):
+    """get_recent_trades(business_days=N) returns trades from N business days back."""
+    # Insert trades: one 2 business days ago, one 10 business days ago
+    recent_dt = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    old_dt = (datetime.now(timezone.utc) - timedelta(days=15)).strftime("%Y-%m-%d %H:%M:%S")
+
+    await db.execute(
+        "INSERT INTO trades (symbol, action, shares, price, total, is_dry_run, executed_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+        ("AAPL", "BUY", 1.0, 150.0, 150.0, recent_dt),
+    )
+    await db.execute(
+        "INSERT INTO trades (symbol, action, shares, price, total, is_dry_run, executed_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+        ("GOOGL", "BUY", 1.0, 140.0, 140.0, old_dt),
+    )
+    await db.commit()
+
+    trades_7d = await queries.get_recent_trades(db, business_days=7)
+    assert len(trades_7d) == 1
+    assert trades_7d[0]["symbol"] == "AAPL"
+
+    trades_20d = await queries.get_recent_trades(db, business_days=20)
+    assert len(trades_20d) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_recent_trades_hours_backward_compat(db):
+    """get_recent_trades(hours=N) still works for backward compatibility."""
+    recent_dt = (datetime.now(timezone.utc) - timedelta(hours=12)).strftime("%Y-%m-%d %H:%M:%S")
+    await db.execute(
+        "INSERT INTO trades (symbol, action, shares, price, total, is_dry_run, executed_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+        ("AAPL", "BUY", 1.0, 150.0, 150.0, recent_dt),
+    )
+    await db.commit()
+
+    trades = await queries.get_recent_trades(db, hours=48)
+    assert len(trades) == 1
+
+
+# ── Symbol trade summary ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_symbol_trade_summary(db):
+    """get_symbol_trade_summary returns net P&L per symbol with round-trips."""
+    now = datetime.now(timezone.utc)
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+
+    # RTX: BUY 100, SELL 95, comm 1.56 each → net = 95 - 100 - 3.12 = -8.12
+    await db.execute(
+        "INSERT INTO trades (symbol, action, shares, price, total, commission_chf, is_dry_run, executed_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+        ("RTX", "BUY", 1.0, 200.0, 100.0, 1.56, yesterday),
+    )
+    await db.execute(
+        "INSERT INTO trades (symbol, action, shares, price, total, commission_chf, is_dry_run, executed_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+        ("RTX", "SELL", 1.0, 195.0, 95.0, 1.56, yesterday),
+    )
+    # AAPL: only a BUY → should NOT appear (no round-trip)
+    await db.execute(
+        "INSERT INTO trades (symbol, action, shares, price, total, commission_chf, is_dry_run, executed_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+        ("AAPL", "BUY", 1.0, 150.0, 150.0, 0.78, yesterday),
+    )
+    await db.commit()
+
+    summary = await queries.get_symbol_trade_summary(db, business_days=7)
+    assert len(summary) == 1
+    assert summary[0]["symbol"] == "RTX"
+    assert summary[0]["buys"] == 1
+    assert summary[0]["sells"] == 1
+    assert summary[0]["net_pnl_chf"] == pytest.approx(-8.12, abs=0.01)
+
+
+# ── Churn candidates with business days ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_churn_candidates_business_days(db):
+    """get_churn_candidates(business_days=N) uses business-day lookback."""
+    recent_dt = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+
+    await db.execute(
+        "INSERT INTO trades (symbol, action, shares, price, total, commission_chf, is_dry_run, executed_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+        ("RTX", "BUY", 1.0, 200.0, 200.0, 0.78, recent_dt),
+    )
+    await db.execute(
+        "INSERT INTO trades (symbol, action, shares, price, total, commission_chf, is_dry_run, executed_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+        ("RTX", "SELL", 1.0, 195.0, 195.0, 0.78, recent_dt),
+    )
+    await db.commit()
+
+    candidates = await queries.get_churn_candidates(db, business_days=7)
+    assert len(candidates) == 1
+    assert candidates[0]["symbol"] == "RTX"
+
+
+# ── Weekly trade count ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_count_trades_this_week_empty(db):
+    """Returns 0 when no trades exist."""
+    count = await queries.count_trades_this_week(db)
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_count_trades_this_week_counts_recent(db):
+    """Counts trades from the current week only."""
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d %H:%M:%S")
+    two_weeks_ago = (now - timedelta(days=14)).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Trade today (should be counted)
+    await db.execute(
+        "INSERT INTO trades (symbol, action, shares, price, total, is_dry_run, executed_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+        ("AAPL", "BUY", 1.0, 150.0, 150.0, today),
+    )
+    # Trade 2 weeks ago (should NOT be counted)
+    await db.execute(
+        "INSERT INTO trades (symbol, action, shares, price, total, is_dry_run, executed_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+        ("GOOGL", "BUY", 1.0, 140.0, 140.0, two_weeks_ago),
+    )
+    await db.commit()
+
+    count = await queries.count_trades_this_week(db)
+    assert count == 1
+
+
+# ── Latest confidence per symbol ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_latest_confidence_per_symbol(db):
+    """Returns the most recent confidence for each requested symbol."""
+    # Two decisions for AAPL (should return the latest)
+    await queries.record_decision(db, "AAPL", "HOLD", 0.3, "weak", "test-model")
+    await queries.record_decision(db, "AAPL", "HOLD", 0.7, "strong", "test-model")
+    # One for GOOGL
+    await queries.record_decision(db, "GOOGL", "BUY", 0.8, "catalyst", "test-model")
+
+    result = await queries.get_latest_confidence_per_symbol(db, ["AAPL", "GOOGL", "MSFT"])
+    assert result["AAPL"] == pytest.approx(0.7)
+    assert result["GOOGL"] == pytest.approx(0.8)
+    assert "MSFT" not in result  # No decision for MSFT
+
+
+@pytest.mark.asyncio
+async def test_latest_confidence_empty_symbols(db):
+    """Returns empty dict for empty symbol list."""
+    result = await queries.get_latest_confidence_per_symbol(db, [])
+    assert result == {}

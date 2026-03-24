@@ -1,7 +1,9 @@
+import json
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from paper_trader.ai.client import AIClient, BudgetExceededError, APIPausedError, ToolUseResponse
+from paper_trader.ai.client import AIClient, BudgetExceededError, APIPausedError, ToolUseResponse, _repair_json
 from paper_trader.ai.calculator import ToolUseAudit, execute_tool, CALCULATOR_TOOLS
 from paper_trader.config import MODEL_HAIKU, MODEL_SONNET, MODEL_OPUS
 from paper_trader.db import queries
@@ -290,3 +292,34 @@ class TestCallWithTools:
                 MODEL_HAIKU, "system", "prompt", "test",
                 tools=CALCULATOR_TOOLS, execute_tool=execute_tool,
             )
+
+
+class TestRepairJson:
+    def test_valid_json_unchanged(self):
+        s = '{"key": "value"}'
+        assert json.loads(_repair_json(s)) == {"key": "value"}
+
+    def test_truncated_string(self):
+        s = '{"key": "unterminated'
+        result = json.loads(_repair_json(s))
+        assert result["key"] == "unterminated"
+
+    def test_truncated_nested_object(self):
+        s = '{"decisions": [{"action": "BUY", "reason": "good"'
+        result = json.loads(_repair_json(s))
+        assert result["decisions"][0]["action"] == "BUY"
+
+    def test_truncated_array(self):
+        s = '{"items": [1, 2, 3'
+        result = json.loads(_repair_json(s))
+        assert result["items"] == [1, 2, 3]
+
+    def test_truncated_string_in_array(self):
+        s = '{"decisions": [{"action": "HOLD", "reasoning": "The market is showing signs of'
+        result = json.loads(_repair_json(s))
+        assert result["decisions"][0]["action"] == "HOLD"
+
+    def test_deeply_nested_truncation(self):
+        s = '{"a": {"b": [{"c": "val'
+        result = json.loads(_repair_json(s))
+        assert result["a"]["b"][0]["c"] == "val"

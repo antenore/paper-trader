@@ -346,6 +346,119 @@ class TestToolUseVerification:
             object.__setattr__(settings, "require_tool_evidence", original_require)
 
 
+class TestAntiChurnRules:
+    """Test system-enforced anti-churn protections."""
+
+    @pytest.mark.asyncio
+    async def test_min_hold_blocks_early_sell(self, pipeline_setup):
+        """RULE 011: Positions held < min_hold_hours cannot be sold."""
+        db, ai_client, market = pipeline_setup
+
+        # Create a position opened just now (< 24h ago)
+        await db.execute(
+            "INSERT INTO positions (symbol, shares, avg_cost, is_dry_run, opened_at) VALUES (?, ?, ?, 0, datetime('now'))",
+            ("AAPL", 1.0, 150.0),
+        )
+        await db.commit()
+
+        analysis = AnalysisResult(
+            decisions=[StockDecision(symbol="AAPL", action="SELL", confidence=0.8, reasoning="rotate out")],
+            market_context="test",
+        )
+
+        async def mock_screening(*a, **kw):
+            from paper_trader.ai.models import ScreeningResult
+            return ScreeningResult(market_summary="ok")
+
+        with patch("paper_trader.trading.pipeline.run_analysis", new_callable=AsyncMock, return_value=analysis):
+            with patch("paper_trader.trading.pipeline.run_screening", new_callable=AsyncMock, side_effect=mock_screening):
+                result = await run_trading_pipeline(db, ai_client, market, run_type="full")
+
+        # SELL should be blocked by RULE 011
+        assert len(result["trades"]) == 1
+        assert "RULE 011" in result["trades"][0].get("skipped", "")
+
+    @pytest.mark.asyncio
+    async def test_session_trade_cap(self, pipeline_setup):
+        """Max N trades per session — excess decisions are skipped."""
+        db, ai_client, market = pipeline_setup
+
+        original_cap = settings.max_session_trades
+        object.__setattr__(settings, "max_session_trades", 1)
+
+        try:
+            analysis = AnalysisResult(
+                decisions=[
+                    StockDecision(symbol="AAPL", action="BUY", confidence=0.8, reasoning="buy1", target_allocation_pct=10),
+                    StockDecision(symbol="GOOGL", action="BUY", confidence=0.7, reasoning="buy2", target_allocation_pct=10),
+                ],
+                market_context="test",
+            )
+
+            async def mock_screening(*a, **kw):
+                from paper_trader.ai.models import ScreeningResult
+                return ScreeningResult(market_summary="ok")
+
+            with patch("paper_trader.trading.pipeline.run_analysis", new_callable=AsyncMock, return_value=analysis):
+                with patch("paper_trader.trading.pipeline.run_screening", new_callable=AsyncMock, side_effect=mock_screening):
+                    result = await run_trading_pipeline(db, ai_client, market, run_type="full")
+
+            # First BUY succeeds, second should be capped
+            executed = [t for t in result["trades"] if t.get("ok")]
+            capped = [t for t in result["trades"] if "trade cap" in t.get("skipped", "").lower()]
+            assert len(executed) == 1
+            assert len(capped) == 1
+        finally:
+            object.__setattr__(settings, "max_session_trades", original_cap)
+
+    @pytest.mark.asyncio
+    async def test_churn_cooloff_uses_config(self, pipeline_setup):
+        """RULE 010 uses settings.churn_cooloff_hours and churn_confidence_threshold."""
+        db, ai_client, market = pipeline_setup
+
+        original_cooloff = settings.churn_cooloff_hours
+        original_thresh = settings.churn_confidence_threshold
+        object.__setattr__(settings, "churn_cooloff_hours", 72)
+        object.__setattr__(settings, "churn_confidence_threshold", 0.85)
+
+        try:
+            # Create a round-trip 50 hours ago (past 48h but within 72h cooloff)
+            from datetime import datetime, timedelta, timezone
+            sell_time = (datetime.now(timezone.utc) - timedelta(hours=50)).strftime("%Y-%m-%d %H:%M:%S")
+            buy_time = (datetime.now(timezone.utc) - timedelta(hours=52)).strftime("%Y-%m-%d %H:%M:%S")
+
+            await db.execute(
+                "INSERT INTO trades (symbol, action, shares, price, total, commission_chf, is_dry_run, executed_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+                ("AAPL", "BUY", 1.0, 150.0, 150.0, 0.78, buy_time),
+            )
+            await db.execute(
+                "INSERT INTO trades (symbol, action, shares, price, total, commission_chf, is_dry_run, executed_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+                ("AAPL", "SELL", 1.0, 148.0, 148.0, 0.78, sell_time),
+            )
+            await db.commit()
+
+            # Try to BUY AAPL again with confidence 0.80 (< 0.85 threshold)
+            analysis = AnalysisResult(
+                decisions=[StockDecision(symbol="AAPL", action="BUY", confidence=0.80, reasoning="re-entry", target_allocation_pct=10)],
+                market_context="test",
+            )
+
+            async def mock_screening(*a, **kw):
+                from paper_trader.ai.models import ScreeningResult
+                return ScreeningResult(market_summary="ok")
+
+            with patch("paper_trader.trading.pipeline.run_analysis", new_callable=AsyncMock, return_value=analysis):
+                with patch("paper_trader.trading.pipeline.run_screening", new_callable=AsyncMock, side_effect=mock_screening):
+                    result = await run_trading_pipeline(db, ai_client, market, run_type="full")
+
+            # Should be blocked: within 72h cooloff
+            blocked = [t for t in result["trades"] if "RULE 010" in t.get("skipped", "")]
+            assert len(blocked) == 1
+        finally:
+            object.__setattr__(settings, "churn_cooloff_hours", original_cooloff)
+            object.__setattr__(settings, "churn_confidence_threshold", original_thresh)
+
+
 def _make_overloaded_error():
     """Create a mock 529 overloaded error."""
     mock_response = MagicMock(spec=httpx.Response)
@@ -474,3 +587,5 @@ class TestRetryOnOverload:
 
         total_waited = sum(c[0][0] for c in mock_sleep.call_args_list)
         assert total_waited <= 180
+
+

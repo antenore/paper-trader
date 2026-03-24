@@ -17,6 +17,11 @@ from paper_trader.ai.prompts import (
 from paper_trader.portfolio.tools import compute_currency_attribution, detect_churn
 from paper_trader.config import MODEL_SONNET, settings
 from paper_trader.db import queries
+from paper_trader.signals import (
+    compute_conviction_curves, compute_news_sentiment,
+    compute_commission_trajectory, compute_signal_quality,
+    format_signal_report,
+)
 from paper_trader.market.news import NewsItem, format_news_for_ai
 from paper_trader.market.prices import MarketDataProvider
 from paper_trader.portfolio.currency import symbol_currency
@@ -108,16 +113,23 @@ async def run_analysis(
     # Query total commissions for context
     total_commissions = await queries.get_total_commissions(db, is_dry_run=is_dry_run)
 
-    # Fetch recent trade history so the AI can see its own past actions
-    recent_trades_raw = await queries.get_recent_trades(db, hours=48, is_dry_run=is_dry_run)
+    # Fetch recent trade history — 7 business days so the AI sees its full recent history
+    recent_trades_raw = await queries.get_recent_trades(db, business_days=7, is_dry_run=is_dry_run)
     recent_trades_text = format_recent_trades(recent_trades_raw)
 
-    # Churn detection (RULE 010)
+    # Per-symbol P&L scorecard (7 business days)
+    symbol_trade_summary: list[dict] = []
+    try:
+        symbol_trade_summary = await queries.get_symbol_trade_summary(db, business_days=7, is_dry_run=is_dry_run)
+    except Exception:
+        logger.debug("Symbol trade summary failed, continuing without it", exc_info=True)
+
+    # Churn detection (RULE 010) — 7 business days window
     churn_alerts: list[dict] = []
     try:
-        churn_candidates = await queries.get_churn_candidates(db, days=5, is_dry_run=is_dry_run)
+        churn_candidates = await queries.get_churn_candidates(db, business_days=7, is_dry_run=is_dry_run)
         if churn_candidates:
-            churn_alerts = detect_churn(churn_candidates, cooloff_hours=48)
+            churn_alerts = detect_churn(churn_candidates, cooloff_hours=settings.churn_cooloff_hours)
     except Exception:
         logger.debug("Churn detection failed, continuing without it", exc_info=True)
 
@@ -129,7 +141,34 @@ async def run_analysis(
     except Exception:
         logger.debug("Currency attribution failed, continuing without it", exc_info=True)
 
-    # Build tools context (stop-loss, sector, correlation, RS, ETF overlap, tier allocation, churn, currency)
+    # Latest confidence per held symbol (for position consolidation recommender)
+    confidence_map: dict[str, float] = {}
+    try:
+        confidence_map = await queries.get_latest_confidence_per_symbol(
+            db, position_symbols, is_dry_run=is_dry_run,
+        )
+    except Exception:
+        logger.debug("Confidence map query failed, continuing without it", exc_info=True)
+
+    # Signal processing layer — conviction curves, news sentiment, commission trajectory
+    signal_report = ""
+    try:
+        conviction_curves = await compute_conviction_curves(db, all_symbols)
+        news_sentiment = await compute_news_sentiment(db, all_symbols)
+        commission_traj = await compute_commission_trajectory(db)
+
+        # Relative strength data is computed inside build_tools_context, but we
+        # need it here for signal quality.  We'll pass None and let
+        # format_signal_report handle the quality computation inline.
+        signal_quality = compute_signal_quality(conviction_curves, news_sentiment, rs_data=None)
+        signal_report = format_signal_report(
+            conviction_curves, news_sentiment, commission_traj, signal_quality,
+        )
+        logger.info("Signal report generated for %d symbols", len(conviction_curves))
+    except Exception:
+        logger.debug("Signal processing failed, continuing without it", exc_info=True)
+
+    # Build tools context (stop-loss, sector, correlation, RS, ETF overlap, tier allocation, churn, currency, P&L scorecard, profit-taking, geopolitical, consolidation)
     tools_context = ""
     try:
         tools_context = await build_tools_context(
@@ -139,6 +178,10 @@ async def run_analysis(
             total_commissions=total_commissions,
             churn_alerts=churn_alerts,
             currency_attribution=currency_attr,
+            symbol_trade_summary=symbol_trade_summary,
+            news_items=news_rows,
+            confidence_map=confidence_map,
+            signal_report=signal_report,
         )
     except Exception:
         logger.debug("Tools context build failed, continuing without it", exc_info=True)
