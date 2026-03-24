@@ -27,6 +27,7 @@ from paper_trader.scheduler.jobs import (
     SCHEDULE,
     trigger_job,
 )
+from paper_trader.analytics import compute_metrics, generate_tearsheet_html
 from paper_trader.trading.dry_run import reset_for_live, run_dry_run
 
 logger = logging.getLogger(__name__)
@@ -294,6 +295,31 @@ def _log_task_result(task: asyncio.Task) -> None:
         logger.warning("Background task %s was cancelled", task.get_name())
     elif exc := task.exception():
         logger.error("Background task %s failed: %s", task.get_name(), exc, exc_info=exc)
+
+
+# ── Analytics ────────────────────────────────────────────────────────
+
+@router.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request):
+    db = await get_db()
+    metrics = await compute_metrics(db)
+    return templates.TemplateResponse(request, "analytics.html", _ctx(request, {
+        "metrics": metrics,
+    }))
+
+
+@router.get("/analytics/tearsheet", response_class=HTMLResponse)
+async def tearsheet_page(request: Request):
+    db = await get_db()
+    html = await generate_tearsheet_html(db)
+    return HTMLResponse(content=html)
+
+
+@router.get("/api/analytics", response_class=JSONResponse)
+async def api_analytics():
+    db = await get_db()
+    metrics = await compute_metrics(db)
+    return JSONResponse(content=metrics)
 
 
 # ── Settings ─────────────────────────────────────────────────────────

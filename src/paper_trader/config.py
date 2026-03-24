@@ -55,6 +55,11 @@ class Settings(BaseSettings):
         "SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA",
     ]
 
+    # Alpaca Market Data (optional - falls back to yfinance if empty)
+    alpaca_api_key: str = ""
+    alpaca_api_secret: str = ""
+    alpaca_data_url: str = "https://data.alpaca.markets"
+
     # Scheduling (timezone)
     timezone: str = "Europe/Zurich"
 

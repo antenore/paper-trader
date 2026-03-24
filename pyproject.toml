@@ -15,6 +15,7 @@ dependencies = [
     "pydantic-settings>=2.7",
     "httpx>=0.28",
     "python-multipart>=0.0.18",
+    "quantstats>=0.0.81",
 ]
 
 [project.scripts]

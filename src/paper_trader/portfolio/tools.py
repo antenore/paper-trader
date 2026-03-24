@@ -640,6 +640,7 @@ async def build_tools_context(
     news_items: list[dict[str, Any]] | None = None,
     confidence_map: dict[str, float] | None = None,
     signal_report: str = "",
+    performance_report: str = "",
 ) -> str:
     """Aggregate all tools into a text block for AI prompts."""
     sections = []
@@ -647,6 +648,10 @@ async def build_tools_context(
     # === SIGNAL QUALITY REPORT === (show FIRST so AI sees it immediately)
     if signal_report:
         sections.append(signal_report)
+
+    # === PORTFOLIO PERFORMANCE METRICS === (right after signals)
+    if performance_report:
+        sections.append(performance_report)
 
     # === POSITION CONSOLIDATION RECOMMENDER ===
     if positions and confidence_map:

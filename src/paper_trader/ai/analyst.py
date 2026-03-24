@@ -17,6 +17,7 @@ from paper_trader.ai.prompts import (
 from paper_trader.portfolio.tools import compute_currency_attribution, detect_churn
 from paper_trader.config import MODEL_SONNET, settings
 from paper_trader.db import queries
+from paper_trader.analytics import compute_metrics, format_metrics_for_ai
 from paper_trader.signals import (
     compute_conviction_curves, compute_news_sentiment,
     compute_commission_trajectory, compute_signal_quality,
@@ -150,6 +151,14 @@ async def run_analysis(
     except Exception:
         logger.debug("Confidence map query failed, continuing without it", exc_info=True)
 
+    # Portfolio performance metrics (QuantStats)
+    performance_report = ""
+    try:
+        perf_metrics = await compute_metrics(db, is_dry_run=is_dry_run)
+        performance_report = format_metrics_for_ai(perf_metrics)
+    except Exception:
+        logger.debug("Performance metrics failed, continuing without them", exc_info=True)
+
     # Signal processing layer — conviction curves, news sentiment, commission trajectory
     signal_report = ""
     try:
@@ -182,6 +191,7 @@ async def run_analysis(
             news_items=news_rows,
             confidence_map=confidence_map,
             signal_report=signal_report,
+            performance_report=performance_report,
         )
     except Exception:
         logger.debug("Tools context build failed, continuing without it", exc_info=True)

@@ -108,6 +108,8 @@ News fetch runs every 30 minutes, 24/7.
 | `/` | Portfolio, positions, equity curve, sector chart |
 | `/decisions` | Decision log with full AI reasoning |
 | `/journal` | Strategy journal (patterns, observations) |
+| `/analytics` | Performance metrics: Sharpe, Sortino, drawdown, alpha vs SPY |
+| `/analytics/tearsheet` | Full QuantStats HTML tearsheet with charts |
 | `/api-usage` | API cost breakdown by model and day |
 | `/dry-run` | Historical simulation mode |
 | `/settings` | Risk parameters, schedule, watchlist |
@@ -131,7 +133,19 @@ uv run pytest -v    # 405 tests
 
 ## Tech Stack
 
-FastAPI, SQLite (aiosqlite), yfinance, Anthropic SDK, APScheduler, Jinja2 + HTMX + Chart.js + Pico CSS.
+FastAPI, SQLite (aiosqlite), Anthropic SDK, APScheduler, httpx, Jinja2 + HTMX + Chart.js + Pico CSS.
+
+### Market Data
+
+Dual-provider setup with automatic routing:
+
+- **Alpaca** (free tier): primary source for US equities. IEX real-time feed, SIP historical
+  data with 15-minute delay. 200 req/min, no funded account needed.
+- **yfinance**: fallback for US stocks when Alpaca is unavailable, and primary source for
+  Swiss stocks (.SW tickers) since Alpaca covers US markets only.
+
+Routing is transparent: `LiveDataProvider` checks the symbol suffix and picks the right
+source. If Alpaca fails for any reason, it falls back to yfinance silently.
 
 ## Where This Stands
 
@@ -155,7 +169,7 @@ For reference, and because this is the direction we are evaluating:
 
 - **Backtesting**: NautilusTrader (Rust core, Python API, same code for backtest and live) or VectorBT (vectorized research)
 - **Indicators**: TA-Lib (200+ battle-tested indicators) or pandas-ta
-- **Data**: Polygon.io, Databento, or Alpaca data. yfinance is unreliable for anything beyond prototyping.
+- **Data**: Polygon.io, Databento, or Alpaca data (we now use Alpaca free tier for US). yfinance is unreliable for anything beyond prototyping, but remains the only free option for Swiss stocks.
 - **Execution**: ib_async (IBKR), Alpaca, CCXT (crypto)
 - **Risk/optimization**: Riskfolio-Lib, PyPortfolioOpt, CVXPY
 - **Analytics**: QuantStats (tear sheets, Sharpe, drawdown, alpha/beta)

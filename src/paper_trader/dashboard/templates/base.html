@@ -528,7 +528,7 @@
         <button class="nav-toggle" aria-label="Menu" aria-expanded="false"
             onclick="var n=this.nextElementSibling;n.classList.toggle('open');this.setAttribute('aria-expanded',n.classList.contains('open'))">&#9776;</button>
         <ul class="nav-links">
-            {% set nav_items = [("/", "Dashboard"), ("/decisions", "Decisions"), ("/journal", "Journal"), ("/api-usage", "API Usage"), ("/dry-run", "Dry Run"), ("/settings", "Settings")] %}
+            {% set nav_items = [("/", "Dashboard"), ("/decisions", "Decisions"), ("/journal", "Journal"), ("/analytics", "Analytics"), ("/api-usage", "API Usage"), ("/dry-run", "Dry Run"), ("/settings", "Settings")] %}
             {% for href, label in nav_items %}
             <li><a href="{{ href }}" {% if request.url.path == href %}aria-current="page"{% endif %}>{{ label }}</a></li>
             {% endfor %}

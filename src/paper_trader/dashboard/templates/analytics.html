@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Analytics — Paper Trader{% endblock %}
+{% block content %}
+<h2>Portfolio Analytics</h2>
+
+{% if metrics.get("error") %}
+<article>
+    <p>{{ metrics.error }}</p>
+</article>
+{% else %}
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="label">Total Return</div>
+        <div class="value {% if metrics.total_return >= 0 %}positive{% else %}negative{% endif %}">
+            {{ "%.2f"|format(metrics.total_return * 100) }}%
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Sharpe Ratio</div>
+        <div class="value {% if metrics.sharpe >= 0 %}positive{% else %}negative{% endif %}">
+            {{ "%.2f"|format(metrics.sharpe) }}
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Max Drawdown</div>
+        <div class="value negative">
+            {{ "%.2f"|format(metrics.max_drawdown * 100) }}%
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Sortino Ratio</div>
+        <div class="value {% if metrics.sortino >= 0 %}positive{% else %}negative{% endif %}">
+            {{ "%.2f"|format(metrics.sortino) }}
+        </div>
+    </div>
+</div>
+
+<div class="grid">
+    <article>
+        <h3>Returns</h3>
+        <div class="table-responsive">
+        <table>
+            <tr><td>Total Return</td><td class="{% if metrics.total_return >= 0 %}positive{% else %}negative{% endif %}">{{ "%.2f"|format(metrics.total_return * 100) }}%</td></tr>
+            <tr><td>CAGR</td><td>{{ "%.2f"|format(metrics.cagr * 100) }}%</td></tr>
+            <tr><td>Best Day</td><td class="positive">{{ "%.2f"|format(metrics.best_day * 100) }}%</td></tr>
+            <tr><td>Worst Day</td><td class="negative">{{ "%.2f"|format(metrics.worst_day * 100) }}%</td></tr>
+            <tr><td>Avg Daily Return</td><td>{{ "%.3f"|format(metrics.avg_return * 100) }}%</td></tr>
+            <tr><td>Win Rate</td><td>{{ "%.1f"|format(metrics.win_rate * 100) }}%</td></tr>
+        </table>
+        </div>
+    </article>
+
+    <article>
+        <h3>Risk</h3>
+        <div class="table-responsive">
+        <table>
+            <tr><td>Volatility (ann.)</td><td>{{ "%.2f"|format(metrics.volatility * 100) }}%</td></tr>
+            <tr><td>Sharpe</td><td>{{ "%.2f"|format(metrics.sharpe) }}</td></tr>
+            <tr><td>Sortino</td><td>{{ "%.2f"|format(metrics.sortino) }}</td></tr>
+            <tr><td>Calmar</td><td>{{ "%.2f"|format(metrics.calmar) }}</td></tr>
+            <tr><td>Max Drawdown</td><td class="negative">{{ "%.2f"|format(metrics.max_drawdown * 100) }}%</td></tr>
+            <tr><td>VaR (95%)</td><td class="negative">{{ "%.2f"|format(metrics.var_95 * 100) }}%</td></tr>
+        </table>
+        </div>
+    </article>
+</div>
+
+{% if metrics.benchmark_return is defined %}
+<article>
+    <h3>vs Benchmark (SPY in CHF)</h3>
+    <div class="table-responsive">
+    <table>
+        <tr><td>Portfolio Return</td><td class="{% if metrics.total_return >= 0 %}positive{% else %}negative{% endif %}">{{ "%.2f"|format(metrics.total_return * 100) }}%</td></tr>
+        <tr><td>Benchmark Return</td><td class="{% if metrics.benchmark_return >= 0 %}positive{% else %}negative{% endif %}">{{ "%.2f"|format(metrics.benchmark_return * 100) }}%</td></tr>
+        <tr><td>Alpha</td><td class="{% if (metrics.total_return - metrics.benchmark_return) >= 0 %}positive{% else %}negative{% endif %}">{{ "%.2f"|format((metrics.total_return - metrics.benchmark_return) * 100) }}%</td></tr>
+        <tr><td>Benchmark Sharpe</td><td>{{ "%.2f"|format(metrics.benchmark_sharpe) }}</td></tr>
+        {% if metrics.information_ratio is not none %}
+        <tr><td>Information Ratio</td><td>{{ "%.2f"|format(metrics.information_ratio) }}</td></tr>
+        {% endif %}
+    </table>
+    </div>
+</article>
+{% endif %}
+
+<article>
+    <p>{{ metrics.trading_days }} trading days ({{ metrics.start_date }} to {{ metrics.end_date }})</p>
+    <a href="/analytics/tearsheet" target="_blank" role="button" class="outline">Full QuantStats Tearsheet</a>
+</article>
+
+{% endif %}
+{% endblock %}
